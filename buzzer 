@@ -1,0 +1,287 @@
+#include <Wire.h>
+
+
+// ================= PINS =================
+#define SDA_PIN 21
+#define SCL_PIN 22
+#define AS5600_ADDR 0x36
+
+
+#define LIMIT_SWITCH_PIN 27
+#define BUZZER_PIN 23
+
+
+// ================= ENCODER =================
+int16_t angle = 0, prevAngle = 0;
+long rotationCount = 0;
+float totalTurns = 0;
+
+
+// ================= BUZZER =================
+enum BuzzerMode {
+  BUZZ_OFF,
+  BUZZ_SINGLE,
+  BUZZ_DOUBLE,
+  BUZZ_TRIPLE
+};
+
+
+BuzzerMode buzzerMode = BUZZ_OFF;
+
+
+unsigned long buzzerTimer = 0;
+unsigned long buzzerStartTime = 0;
+
+
+int stepIndex = 0;
+
+
+// timing
+#define ON_TIME 150
+#define OFF_TIME 150
+#define GAP_TIME 500
+
+
+// ================= READ ENCODER =================
+int readAngle() {
+  Wire.beginTransmission(AS5600_ADDR);
+  Wire.write(0x0E);
+  Wire.endTransmission(false);
+  Wire.requestFrom(AS5600_ADDR, 2);
+
+
+  if (Wire.available() == 2) {
+    int high = Wire.read();
+    int low = Wire.read();
+    return ((high << 8) | low) & 0x0FFF;
+  }
+  return -1;
+}
+
+
+// ================= HANDLE ENCODER =================
+void handleEncoder() {
+
+
+  int a = readAngle();
+  if (a == -1) return;
+
+
+  int diff = a - prevAngle;
+
+
+  if (diff > 3000) rotationCount--;
+  if (diff < -3000) rotationCount++;
+
+
+  prevAngle = a;
+  angle = a;
+
+
+  totalTurns = rotationCount + (angle / 4096.0);
+}
+
+
+// ================= SET BUZZER =================
+void setBuzzer(BuzzerMode mode) {
+
+
+  if (buzzerMode != mode) {
+    buzzerMode = mode;
+    stepIndex = 0;
+    buzzerTimer = millis();
+    buzzerStartTime = millis();
+
+
+    digitalWrite(BUZZER_PIN, HIGH); // 🔴 FORCE RESET
+  }
+}
+
+
+// ================= HANDLE BUZZER =================
+void handleBuzzer() {
+
+
+  bool limitActive = (digitalRead(LIMIT_SWITCH_PIN) == LOW);
+
+
+  // 🔴 HARD STOP
+  if (!limitActive) {
+    buzzerMode = BUZZ_OFF;
+    stepIndex = 0;
+    digitalWrite(BUZZER_PIN, HIGH);
+    return;
+  }
+
+
+  // 🔁 SELECT MODE
+  if (totalTurns <= 1.0) {
+    setBuzzer(BUZZ_DOUBLE);
+  }
+  else if (totalTurns >= 10.0) {
+    setBuzzer(BUZZ_TRIPLE);
+  }
+  else {
+    setBuzzer(BUZZ_SINGLE);
+  }
+
+
+  // ⏱ stop double/triple after 1 min
+  if ((buzzerMode == BUZZ_DOUBLE || buzzerMode == BUZZ_TRIPLE) &&
+      millis() - buzzerStartTime > 60000) {
+
+
+    setBuzzer(BUZZ_OFF);
+    digitalWrite(BUZZER_PIN, LOW);
+    return;
+  }
+
+
+  // ================= PATTERN =================
+  unsigned long now = millis();
+
+
+  switch (buzzerMode) {
+
+
+    // 🔊 SINGLE (clean toggle)
+    case BUZZ_SINGLE:
+
+
+      if (now - buzzerTimer > ON_TIME) {
+        buzzerTimer = now;
+
+
+        if (digitalRead(BUZZER_PIN))
+          digitalWrite(BUZZER_PIN, LOW);
+        else
+          digitalWrite(BUZZER_PIN, HIGH);
+      }
+      break;
+
+
+    // 🔊 DOUBLE
+    case BUZZ_DOUBLE:
+
+
+      if (stepIndex == 0 || stepIndex == 2) {
+        digitalWrite(BUZZER_PIN, HIGH);
+        if (now - buzzerTimer > ON_TIME) {
+          buzzerTimer = now;
+          stepIndex++;
+        }
+      }
+      else if (stepIndex == 1 || stepIndex == 3) {
+        digitalWrite(BUZZER_PIN, LOW);
+        if (now - buzzerTimer > OFF_TIME) {
+          buzzerTimer = now;
+          stepIndex++;
+        }
+      }
+      else {
+        digitalWrite(BUZZER_PIN, LOW);
+        if (now - buzzerTimer > GAP_TIME) {
+          stepIndex = 0;
+          buzzerTimer = now;
+        }
+      }
+      break;
+
+
+    // 🔊 TRIPLE
+    case BUZZ_TRIPLE:
+
+
+      if (stepIndex == 0 || stepIndex == 2 || stepIndex == 4) {
+        digitalWrite(BUZZER_PIN, HIGH);
+        if (now - buzzerTimer > ON_TIME) {
+          buzzerTimer = now;
+          stepIndex++;
+        }
+      }
+      else if (stepIndex == 1 || stepIndex == 3 || stepIndex == 5) {
+        digitalWrite(BUZZER_PIN, LOW);
+        if (now - buzzerTimer > OFF_TIME) {
+          buzzerTimer = now;
+          stepIndex++;
+        }
+      }
+      else {
+        digitalWrite(BUZZER_PIN, LOW);
+        if (now - buzzerTimer > GAP_TIME) {
+          stepIndex = 0;
+          buzzerTimer = now;
+        }
+      }
+      break;
+
+
+    case BUZZ_OFF:
+      digitalWrite(BUZZER_PIN, LOW);
+      break;
+  }
+}
+
+
+// ================= PRINT =================
+void printStatus() {
+
+
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint < 500) return;
+  lastPrint = millis();
+
+
+  Serial.print("Turns: ");
+  Serial.print(totalTurns, 2);
+
+
+  Serial.print(" | Limit: ");
+  Serial.print(digitalRead(LIMIT_SWITCH_PIN) == LOW ? "ON" : "OFF");
+
+
+  Serial.print(" | Buzzer: ");
+
+
+  switch (buzzerMode) {
+    case BUZZ_OFF: Serial.println("OFF"); break;
+    case BUZZ_SINGLE: Serial.println("SINGLE"); break;
+    case BUZZ_DOUBLE: Serial.println("DOUBLE"); break;
+    case BUZZ_TRIPLE: Serial.println("TRIPLE"); break;
+  }
+}
+
+
+// ================= SETUP =================
+void setup() {
+
+
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+
+  pinMode(LIMIT_SWITCH_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+
+
+
+  digitalWrite(BUZZER_PIN, HIGH);
+
+
+  Serial.println("✅ BUZZER STABLE TEST READY");
+}
+
+
+// ================= LOOP =================
+void loop() {
+
+
+  handleEncoder();
+  handleBuzzer();
+  printStatus();
+
+
+  delay(20);
+}
+
