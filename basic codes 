@@ -1,0 +1,503 @@
+#include <Wire.h>
+#include <INA226_WE.h>
+#include <Preferences.h>
+
+
+// ================== PINS ==================
+#define RELAY_PWR 5
+#define RELAY_FWD 18
+#define RELAY_REV 19
+#define LIMIT_SWITCH_PIN 27
+
+
+#define SDA_PIN 21
+#define SCL_PIN 22
+
+
+// ================== RELAY ==================
+#define RELAY_ON  LOW
+#define RELAY_OFF HIGH
+
+
+// ================== I2C ==================
+#define INA_ADDR 0x40
+#define AS5600_ADDR 0x36
+
+
+INA226_WE ina226 = INA226_WE(INA_ADDR);
+Preferences prefs;
+
+
+// ================== LIMITS ==================
+#define CURRENT_OFF 1
+#define MAX_TURNS 10.0
+#define MIN_TURNS 1.0
+
+
+// ================== VOLTAGE ==================
+#define WARN_V     10.0
+#define CUT_V      10.5
+#define CRITICAL_V  9.5
+#define RESET_V    11.0
+
+
+// ================== STATES ==================
+enum State { IDLE, FORWARD_RUN, REVERSE_RUN };
+State motorState = IDLE;
+State lastDirection = FORWARD_RUN;
+
+
+// 🔁 Resume system
+State resumeDirection = IDLE;
+bool resumePending = false;
+
+
+// ================== VOLTAGE STATE ==================
+enum VoltageState {
+  NORMAL,
+  WARNING,
+  WAIT_BYPASS,
+  BYPASS_ACTIVE,
+  LOCKED
+};
+
+
+VoltageState vState = NORMAL;
+
+
+// ================== CURRENT PROTECTION ==================
+int retryCount = 0;
+bool ocFault = false;
+bool lockFault = false;
+unsigned long ocTripTime = 0;
+#define RETRY_DELAY 30000
+
+
+// ================== ENCODER ==================
+int16_t angle = 0, prevAngle = 0;
+long rotationCount = 0;
+float totalTurns = 0;
+
+
+// ================== TIMERS ==================
+unsigned long dashboardTimer = 0;
+unsigned long lowVoltStart = 0;
+bool lowVoltDetected = false;
+
+
+// ================== HELPERS ==================
+float getVoltage() {
+  return ina226.getBusVoltage_V();
+}
+
+
+float getCurrent() {
+  return abs(ina226.getCurrent_mA()) / 1000.0;
+}
+
+
+// ================== STORAGE ==================
+void savePosition() {
+  prefs.putLong("rot", rotationCount);
+  prefs.putInt("angle", angle);
+}
+
+
+void loadPosition() {
+  rotationCount = prefs.getLong("rot", 0);
+  angle = prefs.getInt("angle", 0);
+  prevAngle = angle;
+  totalTurns = rotationCount + (angle / 4096.0);
+}
+
+
+// ================== ENCODER ==================
+int readAngle() {
+  Wire.beginTransmission(AS5600_ADDR);
+  Wire.write(0x0E);
+  Wire.endTransmission(false);
+  Wire.requestFrom(AS5600_ADDR, 2);
+
+
+  if (Wire.available() == 2) {
+    int high = Wire.read();
+    int low = Wire.read();
+    return ((high << 8) | low) & 0x0FFF;
+  }
+  return -1;
+}
+
+
+void handleEncoder() {
+
+
+  int a = readAngle();
+  if (a == -1) return;
+
+
+  int diff = a - prevAngle;
+
+
+  if (diff > 3000) rotationCount--;
+  if (diff < -3000) rotationCount++;
+
+
+  prevAngle = a;
+  angle = a;
+
+
+  totalTurns = rotationCount + (angle / 4096.0);
+
+
+  if (motorState == FORWARD_RUN && totalTurns >= MAX_TURNS) {
+    Serial.println("🛑 FORWARD LIMIT");
+    stopMotor();
+    savePosition();
+  }
+
+
+  if (motorState == REVERSE_RUN && totalTurns <= MIN_TURNS) {
+    Serial.println("🛑 REVERSE LIMIT");
+    stopMotor();
+    savePosition();
+  }
+}
+
+
+// ================== MOTOR ==================
+void stopMotor() {
+
+
+  if (motorState != IDLE) {
+    resumeDirection = motorState;
+    resumePending = true;
+  }
+
+
+  digitalWrite(RELAY_PWR, RELAY_OFF);
+  digitalWrite(RELAY_FWD, RELAY_OFF);
+  digitalWrite(RELAY_REV, RELAY_OFF);
+
+
+  motorState = IDLE;
+}
+
+
+void startMotor(State dir) {
+
+
+  float v = getVoltage();
+
+
+  if (vState == LOCKED) {
+    Serial.println("🔒 BATTERY LOCKED");
+    return;
+  }
+
+
+  if (lockFault) {
+    Serial.println("🔒 CURRENT LOCKED");
+    return;
+  }
+
+
+  if (totalTurns <= 1.0 && v < RESET_V) {
+    Serial.println("🛑 START BLOCKED (LOW BATTERY)");
+    return;
+  }
+
+
+  stopMotor();
+  delay(200);
+
+
+  if (dir == FORWARD_RUN) digitalWrite(RELAY_FWD, RELAY_ON);
+  else digitalWrite(RELAY_REV, RELAY_ON);
+
+
+  delay(200);
+  digitalWrite(RELAY_PWR, RELAY_ON);
+
+
+  motorState = dir;
+  lastDirection = dir;
+}
+
+
+// ================== LIMIT ==================
+void handleLimit() {
+  if (digitalRead(LIMIT_SWITCH_PIN) == LOW) {
+    Serial.println("🔴 LIMIT SWITCH");
+    stopMotor();
+  }
+}
+
+
+// ================== CURRENT ==================
+void handleCurrent() {
+
+
+  float current = getCurrent();
+
+
+  if (lockFault) {
+    stopMotor();
+    return;
+  }
+
+
+  if (motorState != IDLE && current > CURRENT_OFF) {
+
+
+    Serial.println("⚠️ OVERCURRENT");
+
+
+    stopMotor();
+
+
+    ocFault = true;
+    retryCount++;
+    ocTripTime = millis();
+
+
+    Serial.print("Attempt: ");
+    Serial.println(retryCount);
+
+
+    if (retryCount >= 3) {
+      Serial.println("🔒 CURRENT LOCKED");
+      lockFault = true;
+    }
+  }
+
+
+  if (ocFault && !lockFault) {
+    if (millis() - ocTripTime > RETRY_DELAY) {
+      Serial.println("🔁 RETRYING");
+      startMotor(lastDirection);
+      ocFault = false;
+    }
+  }
+}
+
+
+// ================== VOLTAGE ==================
+void handleVoltageSafety() {
+
+
+  float v = getVoltage();
+
+
+  switch (vState) {
+
+
+    case NORMAL:
+      if (v < WARN_V) {
+        Serial.println("⚠️ VOLTAGE WARNING");
+        vState = WARNING;
+      }
+      break;
+
+
+    case WARNING:
+
+
+      if (v >= WARN_V) vState = NORMAL;
+
+
+      else if (motorState != IDLE && v < CUT_V) {
+
+
+        if (!lowVoltDetected) {
+          lowVoltDetected = true;
+          lowVoltStart = millis();
+        }
+
+
+        if (millis() - lowVoltStart > 300) {
+          Serial.println("🛑 LOW VOLTAGE CUT");
+          stopMotor();
+          Serial.println("BYPASS? Y/N");
+          vState = WAIT_BYPASS;
+        }
+
+
+      } else lowVoltDetected = false;
+
+
+      break;
+
+
+    case WAIT_BYPASS:
+
+
+      if (Serial.available()) {
+
+
+        String cmd = Serial.readStringUntil('\n');
+        cmd.trim();
+        cmd.toUpperCase();
+
+
+        if (cmd == "Y") {
+
+
+          Serial.println("⚠️ BYPASS ENABLED");
+          vState = BYPASS_ACTIVE;
+
+
+          delay(200);
+
+
+          if (resumePending && resumeDirection != IDLE) {
+            Serial.println("🔁 RESUMING");
+            startMotor(resumeDirection);
+            resumePending = false;
+          }
+        }
+        else {
+          Serial.println("❌ BYPASS DENIED");
+          vState = WARNING;
+        }
+      }
+
+
+      break;
+
+
+    case BYPASS_ACTIVE:
+
+
+      if (v <= CRITICAL_V) {
+        Serial.println("🛑 CRITICAL VOLTAGE → LOCK");
+        stopMotor();
+        vState = LOCKED;
+      }
+
+
+      break;
+
+
+    case LOCKED:
+
+
+      if (v >= RESET_V) {
+        Serial.println("🔄 BATTERY RESET");
+        vState = NORMAL;
+      }
+
+
+      break;
+  }
+}
+
+
+// ================== COMMAND ==================
+void handleCommand() {
+
+
+  if (!Serial.available()) return;
+
+
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  cmd.toUpperCase();
+
+
+  if (cmd == "F") startMotor(FORWARD_RUN);
+  else if (cmd == "R") startMotor(REVERSE_RUN);
+  else if (cmd == "S") stopMotor();
+}
+
+
+// ================== DASHBOARD ==================
+void printDashboard() {
+
+
+  if (millis() - dashboardTimer < 500) return;
+  dashboardTimer = millis();
+
+
+  Serial.println("================================");
+
+
+  Serial.print("V: "); Serial.print(getVoltage(), 2);
+  Serial.print(" | I: "); Serial.print(getCurrent(), 3);
+  Serial.print(" | Turns: "); Serial.print(totalTurns, 2);
+  Serial.println();
+
+
+  Serial.print("State: ");
+  if (motorState == IDLE) Serial.print("IDLE");
+  else if (motorState == FORWARD_RUN) Serial.print("FWD");
+  else Serial.print("REV");
+
+
+  Serial.print(" | Retry: "); Serial.print(retryCount);
+
+
+  Serial.print(" | Fault: ");
+  if (lockFault) Serial.print("OC_LOCK");
+  else if (vState == LOCKED) Serial.print("UV_LOCK");
+  else Serial.print("OK");
+
+
+  Serial.println();
+  Serial.println("================================");
+}
+
+
+// ================== SETUP ==================
+void setup() {
+
+
+  Serial.begin(115200);
+  Wire.begin(SDA_PIN, SCL_PIN);
+
+
+  pinMode(RELAY_PWR, OUTPUT);
+  pinMode(RELAY_FWD, OUTPUT);
+  pinMode(RELAY_REV, OUTPUT);
+  pinMode(LIMIT_SWITCH_PIN, INPUT_PULLUP);
+
+
+  digitalWrite(RELAY_PWR, RELAY_OFF);
+  digitalWrite(RELAY_FWD, RELAY_OFF);
+  digitalWrite(RELAY_REV, RELAY_OFF);
+
+
+  prefs.begin("encoder", false);
+  loadPosition();
+
+
+  ina226.init();
+
+
+  Serial.println("✅ SYSTEM READY");
+}
+
+
+// ================== LOOP ==================
+void loop() {
+
+
+  handleVoltageSafety();
+
+
+  if (vState == LOCKED) {
+    printDashboard();
+    delay(50);
+    return;
+  }
+
+
+  handleCommand();
+  handleEncoder();
+  handleLimit();
+  handleCurrent();
+  printDashboard();
+
+
+  delay(20);
+}
+
