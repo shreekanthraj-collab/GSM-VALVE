@@ -3,6 +3,8 @@
 #include <Preferences.h>
 
 
+
+
 // ================== PINS ==================
 #define RELAY_PWR 5
 #define RELAY_FWD 18
@@ -11,8 +13,12 @@
 #define BUZZER_PIN 23
 
 
+
+
 #define SDA_PIN 21
 #define SCL_PIN 22
+
+
 
 
 // ================== RELAY ==================
@@ -20,13 +26,19 @@
 #define RELAY_OFF HIGH
 
 
+
+
 // ================== I2C ==================
 #define INA_ADDR 0x40
 #define AS5600_ADDR 0x36
 
 
+
+
 INA226_WE ina226 = INA226_WE(INA_ADDR);
 Preferences prefs;
+
+
 
 
 // ================== LIMITS ==================
@@ -35,11 +47,16 @@ Preferences prefs;
 #define MIN_TURNS 1.0
 
 
+
+
 // ================== VOLTAGE ==================
-#define WARN_V     10.0
+#define WARN_V_LOW  10.7   // enter warning
+#define WARN_V_HIGH 11.0   // exit warning
 #define CUT_V      10.5
 #define CRITICAL_V  9.5
 #define RESET_V    11.0
+
+
 
 
 // ================== STATES ==================
@@ -48,13 +65,19 @@ State motorState = IDLE;
 State lastDirection = FORWARD_RUN;
 
 
+
+
 State resumeDirection = IDLE;
 bool resumePending = false;
+
+
 
 
 // ================== VOLTAGE STATE ==================
 enum VoltageState { NORMAL, WARNING, WAIT_BYPASS, BYPASS_ACTIVE, LOCKED };
 VoltageState vState = NORMAL;
+
+
 
 
 // ================== CURRENT ==================
@@ -65,10 +88,14 @@ unsigned long ocTripTime = 0;
 #define RETRY_DELAY 30000
 
 
+
+
 // ================== ENCODER ==================
 int16_t angle = 0, prevAngle = 0;
 long rotationCount = 0;
 float totalTurns = 0;
+
+
 
 
 // ================== BUZZER ==================
@@ -76,14 +103,20 @@ enum BuzzerMode { BUZZ_OFF, BUZZ_SINGLE, BUZZ_DOUBLE, BUZZ_TRIPLE };
 BuzzerMode buzzerMode = BUZZ_OFF;
 
 
+
+
 unsigned long buzzerTimer = 0;
 unsigned long buzzerStartTime = 0;
 int stepIndex = 0;
 
 
+
+
 #define ON_TIME 150
 #define OFF_TIME 150
 #define GAP_TIME 500
+
+
 
 
 // ================== TIMERS ==================
@@ -92,10 +125,14 @@ unsigned long lowVoltStart = 0;
 bool lowVoltDetected = false;
 
 
+
+
 // ================== CLEAN FLAGS ==================
 bool lastLimitState = HIGH;
 bool lastOvercurrent = false;
 VoltageState lastVState = NORMAL;
+
+
 
 
 float lastV = -1, lastI = -1, lastTurns = -1;
@@ -104,9 +141,13 @@ int lastRetry = -1;
 bool lastLockFault = false;
 
 
+
+
 // ================== HELPERS ==================
 float getVoltage() { return ina226.getBusVoltage_V(); }
 float getCurrent() { return abs(ina226.getCurrent_mA()) / 1000.0; }
+
+
 
 
 // ================== COMMAND ==================
@@ -114,9 +155,13 @@ void handleCommand() {
   if (!Serial.available()) return;
 
 
+
+
   String cmd = Serial.readStringUntil('\n');
   cmd.trim();
   cmd.toUpperCase();
+
+
 
 
   if (cmd == "F") startMotor(FORWARD_RUN);
@@ -125,11 +170,15 @@ void handleCommand() {
 }
 
 
+
+
 // ================== STORAGE ==================
 void savePosition() {
   prefs.putLong("rot", rotationCount);
   prefs.putInt("angle", angle);
 }
+
+
 
 
 void loadPosition() {
@@ -140,12 +189,16 @@ void loadPosition() {
 }
 
 
+
+
 // ================== ENCODER ==================
 int readAngle() {
   Wire.beginTransmission(AS5600_ADDR);
   Wire.write(0x0E);
   Wire.endTransmission(false);
   Wire.requestFrom(AS5600_ADDR, 2);
+
+
 
 
   if (Wire.available() == 2) {
@@ -157,9 +210,13 @@ int readAngle() {
 }
 
 
+
+
 void handleEncoder() {
   int a = readAngle();
   if (a == -1) return;
+
+
 
 
   int diff = a - prevAngle;
@@ -167,9 +224,13 @@ void handleEncoder() {
   if (diff < -3000) rotationCount++;
 
 
+
+
   prevAngle = a;
   angle = a;
   totalTurns = rotationCount + (angle / 4096.0);
+
+
 
 
   if (motorState == FORWARD_RUN && totalTurns >= MAX_TURNS) {
@@ -177,6 +238,8 @@ void handleEncoder() {
     stopMotor();
     savePosition();
   }
+
+
 
 
   if (motorState == REVERSE_RUN && totalTurns <= MIN_TURNS) {
@@ -187,12 +250,16 @@ void handleEncoder() {
 }
 
 
+
+
 // ================== MOTOR ==================
 void stopMotor() {
   if (motorState != IDLE) {
     resumeDirection = motorState;
     resumePending = true;
   }
+
+
 
 
   digitalWrite(RELAY_PWR, RELAY_OFF);
@@ -202,8 +269,12 @@ void stopMotor() {
 }
 
 
+
+
 void startMotor(State dir) {
   float v = getVoltage();
+
+
 
 
   if (vState == LOCKED) {
@@ -212,10 +283,14 @@ void startMotor(State dir) {
   }
 
 
+
+
   if (lockFault) {
     Serial.println("🔒 CURRENT LOCKED");
     return;
   }
+
+
 
 
   if (totalTurns <= 1.0 && v < RESET_V) {
@@ -224,16 +299,24 @@ void startMotor(State dir) {
   }
 
 
+
+
   stopMotor();
   delay(200);
+
+
 
 
   if (dir == FORWARD_RUN) digitalWrite(RELAY_FWD, RELAY_ON);
   else digitalWrite(RELAY_REV, RELAY_ON);
 
 
+
+
   delay(200);
   digitalWrite(RELAY_PWR, RELAY_ON);
+
+
 
 
   motorState = dir;
@@ -241,9 +324,13 @@ void startMotor(State dir) {
 }
 
 
+
+
 // ================== LIMIT ==================
 void handleLimit() {
   bool currentState = digitalRead(LIMIT_SWITCH_PIN);
+
+
 
 
   if (lastLimitState == HIGH && currentState == LOW) {
@@ -252,8 +339,12 @@ void handleLimit() {
   }
 
 
+
+
   lastLimitState = currentState;
 }
+
+
 
 
 // ================== CURRENT ==================
@@ -262,11 +353,17 @@ void handleCurrent() {
   bool isOver = current > CURRENT_OFF;
 
 
+
+
   if (motorState != IDLE && isOver && !lastOvercurrent) {
     Serial.println("⚠️ OVERCURRENT");
 
 
+
+
     stopMotor();
+
+
 
 
     ocFault = true;
@@ -274,8 +371,12 @@ void handleCurrent() {
     ocTripTime = millis();
 
 
+
+
     Serial.print("Attempt: ");
     Serial.println(retryCount);
+
+
 
 
     if (retryCount >= 3) {
@@ -285,7 +386,11 @@ void handleCurrent() {
   }
 
 
+
+
   lastOvercurrent = isOver;
+
+
 
 
   if (ocFault && !lockFault && millis() - ocTripTime > RETRY_DELAY) {
@@ -296,31 +401,42 @@ void handleCurrent() {
 }
 
 
+
+
 // ================== VOLTAGE ==================
 void handleVoltageSafety() {
   float v = getVoltage();
 
 
+
+
   switch (vState) {
 
 
+
+
     case NORMAL:
-      if (v < WARN_V && lastVState != WARNING) {
-        Serial.println("⚠️ VOLTAGE WARNING");
-        vState = WARNING;
-      }
-      break;
+  if (v < WARN_V_LOW) {
+    Serial.println("⚠️ VOLTAGE WARNING");
+    vState = WARNING;
+  }
+  break;
 
 
-    case WARNING:
-      if (v >= WARN_V) {
-        vState = NORMAL;
-      }
+case WARNING:
+
+
+  if (v > WARN_V_HIGH) {
+    Serial.println("✅ VOLTAGE NORMAL");
+    vState = NORMAL;
+  }
       else if (motorState != IDLE && v < CUT_V) {
         if (!lowVoltDetected) {
           lowVoltDetected = true;
           lowVoltStart = millis();
         }
+
+
 
 
         if (millis() - lowVoltStart > 300) {
@@ -335,32 +451,48 @@ void handleVoltageSafety() {
       break;
 
 
+
+
     case WAIT_BYPASS:
-      if (Serial.available()) {
-        String cmd = Serial.readStringUntil('\n');
-        cmd.trim();
-        cmd.toUpperCase();
 
 
-        if (cmd == "Y") {
-          Serial.println("⚠️ BYPASS ENABLED");
-          vState = BYPASS_ACTIVE;
+  // ✅ AUTO RECOVERY (IMPORTANT FIX)
+  if (v >= RESET_V) {
+    Serial.println("🔄 VOLTAGE RECOVERED → NORMAL");
+    vState = NORMAL;
+    break;
+  }
 
 
-          delay(200);
+  if (Serial.available()) {
 
 
-          if (resumePending && resumeDirection != IDLE) {
-            Serial.println("🔁 RESUMING");
-            startMotor(resumeDirection);
-            resumePending = false;
-          }
-        } else {
-          Serial.println("❌ BYPASS DENIED");
-          vState = WARNING;
-        }
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    cmd.toUpperCase();
+
+
+    if (cmd == "Y") {
+
+
+      Serial.println("⚠️ BYPASS ENABLED");
+      vState = BYPASS_ACTIVE;
+
+
+      if (resumePending && resumeDirection != IDLE) {
+        Serial.println("🔁 RESUMING");
+        startMotor(resumeDirection);
+        resumePending = false;
       }
-      break;
+    }
+    else {
+      Serial.println("❌ BYPASS DENIED");
+      vState = WARNING;
+    }
+  }
+  break;
+
+
 
 
     case BYPASS_ACTIVE:
@@ -372,6 +504,8 @@ void handleVoltageSafety() {
       break;
 
 
+
+
     case LOCKED:
       if (v >= RESET_V) {
         Serial.println("🔄 BATTERY RESET");
@@ -381,8 +515,12 @@ void handleVoltageSafety() {
   }
 
 
+
+
   lastVState = vState;
 }
+
+
 
 
 // ================== BUZZER ==================
@@ -397,8 +535,12 @@ void setBuzzer(BuzzerMode mode) {
 }
 
 
+
+
 void handleBuzzer() {
   bool limitActive = (digitalRead(LIMIT_SWITCH_PIN) == LOW);
+
+
 
 
   if (!limitActive) {
@@ -409,9 +551,13 @@ void handleBuzzer() {
   }
 
 
+
+
   if (totalTurns <= 1.0) setBuzzer(BUZZ_DOUBLE);
   else if (totalTurns >= 10.0) setBuzzer(BUZZ_TRIPLE);
   else setBuzzer(BUZZ_SINGLE);
+
+
 
 
   if ((buzzerMode == BUZZ_DOUBLE || buzzerMode == BUZZ_TRIPLE) &&
@@ -422,10 +568,16 @@ void handleBuzzer() {
   }
 
 
+
+
   unsigned long now = millis();
 
 
+
+
   switch (buzzerMode) {
+
+
 
 
     case BUZZ_SINGLE:
@@ -434,6 +586,8 @@ void handleBuzzer() {
         digitalWrite(BUZZER_PIN, !digitalRead(BUZZER_PIN));
       }
       break;
+
+
 
 
     case BUZZ_DOUBLE:
@@ -452,6 +606,8 @@ void handleBuzzer() {
       break;
 
 
+
+
     case BUZZ_TRIPLE:
       if (stepIndex == 0 || stepIndex == 2 || stepIndex == 4) {
         digitalWrite(BUZZER_PIN, HIGH);
@@ -468,11 +624,15 @@ void handleBuzzer() {
       break;
 
 
+
+
     case BUZZ_OFF:
       digitalWrite(BUZZER_PIN, LOW);
       break;
   }
 }
+
+
 
 
 // ================== DASHBOARD ==================
@@ -481,8 +641,12 @@ void printDashboard() {
   dashboardTimer = millis();
 
 
+
+
   float v = getVoltage();
   float i = getCurrent();
+
+
 
 
   if (abs(v - lastV) < 0.01 &&
@@ -494,11 +658,15 @@ void printDashboard() {
       vState == lastVState) return;
 
 
+
+
   Serial.println("================================");
   Serial.print("V: "); Serial.print(v, 2);
   Serial.print(" | I: "); Serial.print(i, 3);
   Serial.print(" | Turns: "); Serial.print(totalTurns, 2);
   Serial.println();
+
+
 
 
   Serial.print("State: ");
@@ -507,7 +675,11 @@ void printDashboard() {
   else Serial.print("REV");
 
 
+
+
   Serial.print(" | Retry: "); Serial.print(retryCount);
+
+
 
 
   Serial.print(" | Fault: ");
@@ -516,8 +688,12 @@ void printDashboard() {
   else Serial.print("OK");
 
 
+
+
   Serial.println();
   Serial.println("================================");
+
+
 
 
   lastV = v;
@@ -530,10 +706,14 @@ void printDashboard() {
 }
 
 
+
+
 // ================== SETUP ==================
 void setup() {
   Serial.begin(115200);
   Wire.begin(SDA_PIN, SCL_PIN);
+
+
 
 
   pinMode(RELAY_PWR, OUTPUT);
@@ -543,21 +723,31 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
 
 
+
+
   digitalWrite(RELAY_PWR, RELAY_OFF);
   digitalWrite(RELAY_FWD, RELAY_OFF);
   digitalWrite(RELAY_REV, RELAY_OFF);
   digitalWrite(BUZZER_PIN, HIGH);
 
 
+
+
   prefs.begin("encoder", false);
   loadPosition();
+
+
 
 
   ina226.init();
 
 
+
+
   Serial.println("✅ SYSTEM READY");
 }
+
+
 
 
 // ================== LOOP ==================
@@ -571,6 +761,10 @@ void loop() {
   printDashboard();
 
 
+
+
   delay(20);
 }
+
+
 
