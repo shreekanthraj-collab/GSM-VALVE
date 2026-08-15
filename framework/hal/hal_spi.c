@@ -1,5 +1,7 @@
 #include "hal_spi.h"
 
+#include <stddef.h>
+
 #include "driver/gpio.h"
 
 
@@ -12,16 +14,15 @@ typedef struct {
 } hal_spi_bus_state_t;
 
 
-static hal_spi_bus_state_t s_bus_state[HAL_SPI_MAX_HOSTS] = {
-    {0},
-};
+static hal_spi_bus_state_t s_bus_state[HAL_SPI_MAX_HOSTS];
 
 
 /* -------------------------------------------------------------------------- */
 /* Validation                                                                 */
 /* -------------------------------------------------------------------------- */
 
-static bool valid_host(spi_host_device_t host)
+static bool valid_host(
+    spi_host_device_t host)
 {
     return host >= SPI1_HOST &&
            host < HAL_SPI_MAX_HOSTS;
@@ -39,7 +40,8 @@ static hal_spi_bus_state_t *get_bus_state(
 }
 
 
-static bool valid_gpio(int gpio)
+static bool valid_gpio(
+    int gpio)
 {
     return gpio >= 0 &&
            gpio < GPIO_NUM_MAX;
@@ -90,7 +92,7 @@ static esp_err_t validate_device_config(
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (config->mode > 3) {
+    if (config->mode > 3U) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -109,7 +111,8 @@ static esp_err_t validate_device_config(
 esp_err_t hal_spi_bus_init(
     const hal_spi_bus_config_t *config)
 {
-    esp_err_t err = validate_bus_config(config);
+    esp_err_t err =
+        validate_bus_config(config);
 
     if (err != ESP_OK) {
         return err;
@@ -133,8 +136,10 @@ esp_err_t hal_spi_bus_init(
         .mosi_io_num = config->mosi_gpio,
         .miso_io_num = config->miso_gpio,
         .sclk_io_num = config->sclk_gpio,
+
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
+
         .max_transfer_sz = config->max_transfer_sz,
     };
 
@@ -147,6 +152,10 @@ esp_err_t hal_spi_bus_init(
         return err;
     }
 
+    /*
+     * Update HAL state only after successful
+     * ESP-IDF bus initialization.
+     */
     state->host = config->host;
     state->initialized = true;
 
@@ -173,18 +182,19 @@ esp_err_t hal_spi_bus_deinit(
     }
 
     /*
-     * All SPI devices must have been removed by the caller
-     * before the bus is deinitialized.
+     * ESP-IDF will reject bus removal while devices
+     * are still attached.
+     *
+     * Therefore the HAL state is changed only after
+     * spi_bus_free() succeeds.
      */
-    esp_err_t err = spi_bus_free(host);
+    esp_err_t err =
+        spi_bus_free(host);
 
     if (err != ESP_OK) {
         return err;
     }
 
-    /*
-     * Detach HAL state only after successful bus removal.
-     */
     state->initialized = false;
     state->host = SPI_HOST_MAX;
 
@@ -206,7 +216,8 @@ esp_err_t hal_spi_device_add(
 
     *handle = NULL;
 
-    esp_err_t err = validate_device_config(config);
+    esp_err_t err =
+        validate_device_config(config);
 
     if (err != ESP_OK) {
         return err;
@@ -267,7 +278,7 @@ esp_err_t hal_spi_transmit(
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (length_bytes == 0) {
+    if (length_bytes == 0U) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -276,8 +287,11 @@ esp_err_t hal_spi_transmit(
         return ESP_ERR_INVALID_ARG;
     }
 
+    /*
+     * spi_transaction_t.length is expressed in bits.
+     */
     spi_transaction_t transaction = {
-        .length = length_bytes * 8,
+        .length = length_bytes * 8U,
         .tx_buffer = tx_data,
         .rx_buffer = rx_data,
     };
