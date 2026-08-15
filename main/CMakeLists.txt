@@ -10,9 +10,11 @@
         "../framework/hal/hal_spi.c"
         "../framework/hal/hal_uart.c"
         "../framework/drivers/as5600/drv_as5600.c"
+        "../framework/managers/encoder/encoder_manager.c"
     INCLUDE_DIRS
         "."
         "../framework/hal"
         "../framework/drivers/as5600"
+        "../framework/managers/encoder"
         "../boards/gsm_valve"
 )
