@@ -34,7 +34,7 @@ typedef struct {
 
     int queue_size;
 
-    uint32_t timeout_ms;
+
 } hal_spi_device_config_t;
 
 
