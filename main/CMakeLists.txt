@@ -11,10 +11,12 @@
         "../framework/hal/hal_uart.c"
         "../framework/drivers/as5600/drv_as5600.c"
         "../framework/managers/encoder/encoder_manager.c"
+        "../framework/managers/encoder_persistence/encoder_persistence_manager.c"
     INCLUDE_DIRS
-        "."        "../framework/managers/encoder_persistence"
+        "."
         "../framework/hal"
         "../framework/drivers/as5600"
         "../framework/managers/encoder"
+        "../framework/managers/encoder_persistence"
         "../boards/gsm_valve"
 )
