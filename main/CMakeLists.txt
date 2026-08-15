@@ -1,8 +1,14 @@
 ﻿idf_component_register(
     SRCS
         "app_main.c"
+        "../framework/hal/hal_adc.c"
         "../framework/hal/hal_gpio.c"
         "../framework/hal/hal_i2c.c"
+        "../framework/hal/hal_nvs.c"
+        "../framework/hal/hal_pwm.c"
+        "../framework/hal/hal_rtc.c"
+        "../framework/hal/hal_spi.c"
+        "../framework/hal/hal_uart.c"
     INCLUDE_DIRS
         "."
         "../framework/hal"
