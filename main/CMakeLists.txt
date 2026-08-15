@@ -12,7 +12,7 @@
         "../framework/drivers/as5600/drv_as5600.c"
         "../framework/managers/encoder/encoder_manager.c"
     INCLUDE_DIRS
-        "."
+        "."        "../framework/managers/encoder_persistence"
         "../framework/hal"
         "../framework/drivers/as5600"
         "../framework/managers/encoder"
