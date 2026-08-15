@@ -9,8 +9,10 @@
         "../framework/hal/hal_rtc.c"
         "../framework/hal/hal_spi.c"
         "../framework/hal/hal_uart.c"
+        "../framework/drivers/as5600/drv_as5600.c"
     INCLUDE_DIRS
         "."
         "../framework/hal"
+        "../framework/drivers/as5600"
         "../boards/gsm_valve"
 )
