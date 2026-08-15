@@ -1,0 +1,10 @@
+﻿idf_component_register(
+    SRCS
+        "app_main.c"
+        "../framework/hal/hal_gpio.c"
+        "../framework/hal/hal_i2c.c"
+    INCLUDE_DIRS
+        "."
+        "../framework/hal"
+        "../boards/gsm_valve"
+)
