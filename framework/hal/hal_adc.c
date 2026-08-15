@@ -5,7 +5,9 @@
 
 
 #define HAL_ADC_UNIT_COUNT       2
-#define HAL_ADC_MAX_CHANNELS     10
+#include "soc/soc_caps.h"
+
+#define HAL_ADC_MAX_CHANNELS     SOC_ADC_CHANNEL_NUM(0)     10
 
 
 typedef struct {
