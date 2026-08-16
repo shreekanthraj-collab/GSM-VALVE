@@ -22,6 +22,7 @@
         "../framework/managers/rtc/rtc_manager.c"
         "../framework/managers/battery/battery_manager.c"
         "../framework/managers/modbus_devices/modbus_device_manager.c"
+        "../framework/managers/scheduling/scheduling_manager.c"
 
     INCLUDE_DIRS
         "."
@@ -36,5 +37,6 @@
         "../framework/managers/rtc"
         "../framework/managers/battery"
         "../framework/managers/modbus_devices"
+        "../framework/managers/scheduling"
         "../boards/gsm_valve"
 )
