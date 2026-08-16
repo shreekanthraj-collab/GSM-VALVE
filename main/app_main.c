@@ -5,6 +5,7 @@
 
 #include "hal_i2c.h"
 #include "hal_nvs.h"
+#include "rtc_manager.h"
 
 
 /* -------------------------------------------------------------------------- */
@@ -70,9 +71,25 @@ static esp_err_t app_init(void)
         "I2C initialized: 100 kHz");
 
     /*
-     * RTC initialization will be added after the I2C
-     * bus initialization has been verified independently.
+     * Initialize the RTC manager.
+     *
+     * The RTC manager depends on the already initialized
+     * I2C HAL.
      */
+    err = rtc_manager_init();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "RTC initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "RTC manager initialized");
 
     return ESP_OK;
 }
