@@ -24,5 +24,5 @@
 #define BOARD_LTE_STATUS_GPIO        (-1)
 #define BOARD_BUZZER_GPIO            (-1)
 #define BOARD_VBAT_ADC_GPIO          (-1)
-#define BOARD_I2C_SDA_GPIO           (-1)
-#define BOARD_I2C_SCL_GPIO           (-1)
+#define BOARD_I2C_SDA_GPIO           8
+#define BOARD_I2C_SCL_GPIO           9
