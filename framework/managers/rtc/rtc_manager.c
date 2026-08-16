@@ -45,6 +45,12 @@ esp_err_t rtc_manager_init(void)
 
     if (err != ESP_OK) {
         s_valid = false;
+
+        /*
+         * RTC hardware initialization succeeded.
+         * A failed initial time read means the current
+         * RTC time is not valid yet.
+         */
         return ESP_OK;
     }
 

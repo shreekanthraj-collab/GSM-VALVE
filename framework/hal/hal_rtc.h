@@ -9,6 +9,11 @@
 extern "C" {
 #endif
 
+
+/* -------------------------------------------------------------------------- */
+/* Weekday                                                                    */
+/* -------------------------------------------------------------------------- */
+
 #define HAL_RTC_WEEKDAY_SUNDAY       0
 #define HAL_RTC_WEEKDAY_MONDAY       1
 #define HAL_RTC_WEEKDAY_TUESDAY      2
@@ -18,7 +23,12 @@ extern "C" {
 #define HAL_RTC_WEEKDAY_SATURDAY     6
 
 
-typedef struct {
+/* -------------------------------------------------------------------------- */
+/* Date and time                                                              */
+/* -------------------------------------------------------------------------- */
+
+typedef struct
+{
     uint8_t second;
     uint8_t minute;
     uint8_t hour;
@@ -28,8 +38,13 @@ typedef struct {
     uint16_t year;
 
     uint8_t weekday;
+
 } hal_rtc_time_t;
 
+
+/* -------------------------------------------------------------------------- */
+/* Hardware alarm                                                             */
+/* -------------------------------------------------------------------------- */
 
 /*
  * PCF8563 hardware alarm.
@@ -39,7 +54,8 @@ typedef struct {
  *
  * The PCF8563 does not provide a seconds alarm comparator.
  */
-typedef struct {
+typedef struct
+{
     uint8_t minute;
     uint8_t hour;
     uint8_t day;
@@ -51,8 +67,13 @@ typedef struct {
     bool weekday_enabled;
 
     bool enabled;
+
 } hal_rtc_alarm_t;
 
+
+/* -------------------------------------------------------------------------- */
+/* Initialization                                                             */
+/* -------------------------------------------------------------------------- */
 
 /*
  * Initialize the PCF8563 RTC.
@@ -70,6 +91,10 @@ esp_err_t hal_rtc_init(void);
 esp_err_t hal_rtc_deinit(void);
 
 
+/* -------------------------------------------------------------------------- */
+/* Time                                                                       */
+/* -------------------------------------------------------------------------- */
+
 /*
  * Read the complete RTC date/time.
  */
@@ -84,6 +109,10 @@ esp_err_t hal_rtc_set_time(
     const hal_rtc_time_t *time);
 
 
+/* -------------------------------------------------------------------------- */
+/* Timestamp                                                                  */
+/* -------------------------------------------------------------------------- */
+
 /*
  * Read the current RTC time as a Unix timestamp.
  */
@@ -97,6 +126,10 @@ esp_err_t hal_rtc_get_timestamp(
 esp_err_t hal_rtc_set_timestamp(
     uint32_t timestamp);
 
+
+/* -------------------------------------------------------------------------- */
+/* Alarm                                                                      */
+/* -------------------------------------------------------------------------- */
 
 /*
  * Read the configured hardware alarm.
@@ -118,10 +151,15 @@ esp_err_t hal_rtc_set_alarm(
 esp_err_t hal_rtc_clear_alarm(void);
 
 
+/* -------------------------------------------------------------------------- */
+/* State                                                                      */
+/* -------------------------------------------------------------------------- */
+
 /*
  * Check whether the RTC HAL is initialized.
  */
 bool hal_rtc_is_initialized(void);
+
 
 #ifdef __cplusplus
 }
