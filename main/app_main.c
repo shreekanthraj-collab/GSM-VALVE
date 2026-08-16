@@ -3,6 +3,7 @@
 
 #include "esp_log.h"
 
+#include "hal_i2c.h"
 #include "hal_nvs.h"
 
 
@@ -40,12 +41,37 @@ static esp_err_t app_init(void)
         "NVS initialized");
 
     /*
-     * Additional hardware and managers will be
-     * initialized here in their dependency order.
+     * Initialize the I2C bus.
      *
-     * I2C and VBAT ADC initialization are intentionally
-     * deferred until the board-specific GPIO mapping is
-     * finalized.
+     * Board GPIO mapping:
+     *   SDA = GPIO 8
+     *   SCL = GPIO 9
+     *
+     * The I2C HAL owns the physical bus.
+     */
+    const hal_i2c_config_t i2c_config = {
+        .frequency_hz = 100000U,
+        .timeout_ms = 1000U
+    };
+
+    err = hal_i2c_init(&i2c_config);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "I2C initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "I2C initialized: 100 kHz");
+
+    /*
+     * RTC initialization will be added after the I2C
+     * bus initialization has been verified independently.
      */
 
     return ESP_OK;
