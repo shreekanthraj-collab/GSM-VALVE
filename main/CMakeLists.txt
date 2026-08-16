@@ -15,6 +15,7 @@
         "../framework/managers/encoder_persistence/encoder_persistence_manager.c"
         "../framework/managers/encoder_position/encoder_position_manager.c"
         "../framework/managers/rtc/rtc_manager.c"
+        "../framework/managers/battery/battery_manager.c"
     INCLUDE_DIRS
         "."
         "../framework/hal"
@@ -24,5 +25,6 @@
         "../framework/managers/encoder_persistence"
         "../framework/managers/encoder_position"
         "../framework/managers/rtc"
+        "../framework/managers/battery"
         "../boards/gsm_valve"
 )
