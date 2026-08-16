@@ -3,14 +3,15 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 
-
-#define HAL_ADC_UNIT_COUNT       2
 #include "soc/soc_caps.h"
 
-#define HAL_ADC_MAX_CHANNELS     SOC_ADC_CHANNEL_NUM(0)     
+
+#define HAL_ADC_UNIT_COUNT       2
+#define HAL_ADC_MAX_CHANNELS     SOC_ADC_CHANNEL_NUM(0)
 
 
-typedef struct {
+typedef struct
+{
     bool initialized;
 
     adc_unit_t unit;
@@ -21,7 +22,8 @@ typedef struct {
 } hal_adc_channel_state_t;
 
 
-typedef struct {
+typedef struct
+{
     bool initialized;
 
     adc_unit_t unit;
@@ -228,7 +230,8 @@ static esp_err_t delete_calibration(
 esp_err_t hal_adc_init(
     const hal_adc_config_t *config)
 {
-    esp_err_t err = validate_config(config);
+    esp_err_t err =
+        validate_config(config);
 
     if (err != ESP_OK) {
         return err;
@@ -274,7 +277,7 @@ esp_err_t hal_adc_init(
 
         unit_state->initialized = true;
         unit_state->unit = config->unit;
-        unit_state->channel_users = 0;
+        unit_state->channel_users = 0U;
     }
 
     adc_oneshot_chan_cfg_t channel_config = {
@@ -294,7 +297,7 @@ esp_err_t hal_adc_init(
          * created above so HAL state remains synchronized
          * with the ESP-IDF driver.
          */
-        if (unit_state->channel_users == 0) {
+        if (unit_state->channel_users == 0U) {
 
             esp_err_t cleanup_err =
                 adc_oneshot_del_unit(
@@ -303,7 +306,7 @@ esp_err_t hal_adc_init(
             if (cleanup_err == ESP_OK) {
                 unit_state->handle = NULL;
                 unit_state->initialized = false;
-                unit_state->channel_users = 0;
+                unit_state->channel_users = 0U;
             }
         }
 
@@ -345,7 +348,7 @@ esp_err_t hal_adc_deinit(
     /*
      * All owned channels must be released first.
      */
-    if (unit_state->channel_users != 0) {
+    if (unit_state->channel_users != 0U) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -359,7 +362,7 @@ esp_err_t hal_adc_deinit(
 
     unit_state->handle = NULL;
     unit_state->initialized = false;
-    unit_state->channel_users = 0;
+    unit_state->channel_users = 0U;
 
     return ESP_OK;
 }
@@ -382,7 +385,9 @@ esp_err_t hal_adc_read_raw(
         get_unit_state(unit);
 
     hal_adc_channel_state_t *channel_state =
-        get_channel_state(unit, channel);
+        get_channel_state(
+            unit,
+            channel);
 
     if (unit_state == NULL ||
         channel_state == NULL) {
@@ -418,7 +423,9 @@ esp_err_t hal_adc_read_mv(
         get_unit_state(unit);
 
     hal_adc_channel_state_t *channel_state =
-        get_channel_state(unit, channel);
+        get_channel_state(
+            unit,
+            channel);
 
     if (unit_state == NULL ||
         channel_state == NULL) {
@@ -464,7 +471,11 @@ esp_err_t hal_adc_read_mv(
         return err;
     }
 
-    return delete_err;
+    if (delete_err != ESP_OK) {
+        return delete_err;
+    }
+
+    return ESP_OK;
 }
 
 
@@ -477,7 +488,9 @@ bool hal_adc_is_initialized(
     adc_channel_t channel)
 {
     hal_adc_channel_state_t *channel_state =
-        get_channel_state(unit, channel);
+        get_channel_state(
+            unit,
+            channel);
 
     if (channel_state == NULL) {
         return false;

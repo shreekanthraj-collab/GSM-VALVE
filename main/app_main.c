@@ -5,6 +5,7 @@
 
 #include "hal_i2c.h"
 #include "hal_nvs.h"
+#include "hal_adc.h"
 #include "rtc_manager.h"
 
 #include "drv_as5600.h"
@@ -13,12 +14,52 @@
 #include "encoder_persistence_manager.h"
 #include "encoder_position_manager.h"
 
+#include "battery_manager.h"
+
 
 /* -------------------------------------------------------------------------- */
 /* Application                                                                */
 /* -------------------------------------------------------------------------- */
 
 static const char *TAG = "GSM_VALVE";
+
+
+/* -------------------------------------------------------------------------- */
+/* Battery configuration                                                      */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * GSM-VALVE hardware:
+ *
+ * VBAT ADC input:
+ *   GPIO1 -> ADC1 channel 0
+ *
+ * Battery divider:
+ *   100 kOhm / 10 kOhm
+ *   ratio = (100k + 10k) / 10k = 11.0
+ *
+ * Battery policy:
+ *   critical < 11.2 V
+ *   cut      < 11.6 V
+ *   low      < 12.0 V
+ *   reset    = 12.0 V
+ *   high     > 12.4 V
+ *
+ * The reset threshold is retained as part of the battery policy
+ * configuration for the later motor/bypass manager.
+ */
+static const battery_manager_config_t battery_config = {
+    .unit = ADC_UNIT_1,
+    .channel = ADC_CHANNEL_0,
+    .attenuation = ADC_ATTEN_DB_12,
+    .bitwidth = ADC_BITWIDTH_DEFAULT,
+    .divider_ratio = 11.0f,
+    .critical_voltage_v = 11.2f,
+    .cut_voltage_v = 11.6f,
+    .low_voltage_v = 12.0f,
+    .reset_voltage_v = 12.0f,
+    .high_voltage_v = 12.4f
+};
 
 
 /* -------------------------------------------------------------------------- */
@@ -267,6 +308,55 @@ static esp_err_t app_init(void)
         (long long)position.total_angle,
         (double)position.total_turns,
         position.restored ? "yes" : "no");
+
+    /*
+     * Initialize the battery manager.
+     *
+     * Hardware mapping:
+     *   VBAT = GPIO1 = ADC1 channel 0
+     *
+     * The battery manager owns this ADC channel.
+     */
+    err = battery_manager_init(&battery_config);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Battery manager initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Battery manager initialized: GPIO1 / ADC1_CH0");
+
+    /*
+     * Take an initial battery measurement.
+     *
+     * This validates the ADC path during application startup
+     * without yet applying motor-control battery policy.
+     */
+    battery_manager_reading_t battery = {0};
+
+    err = battery_manager_read(&battery);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Initial battery read failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Battery: ADC=%.3f V VBAT=%.3f V state=%d",
+        (double)battery.adc_voltage_v,
+        (double)battery.battery_voltage_v,
+        (int)battery.state);
 
     return ESP_OK;
 }

@@ -10,7 +10,8 @@
 extern "C" {
 #endif
 
-typedef struct {
+typedef struct
+{
     adc_unit_t unit;
     adc_channel_t channel;
 
