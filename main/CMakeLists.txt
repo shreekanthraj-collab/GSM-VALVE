@@ -21,6 +21,7 @@
         "../framework/managers/encoder_position/encoder_position_manager.c"
         "../framework/managers/rtc/rtc_manager.c"
         "../framework/managers/battery/battery_manager.c"
+        "../framework/managers/modbus_devices/modbus_device_manager.c"
 
     INCLUDE_DIRS
         "."
@@ -34,5 +35,6 @@
         "../framework/managers/encoder_position"
         "../framework/managers/rtc"
         "../framework/managers/battery"
+        "../framework/managers/modbus_devices"
         "../boards/gsm_valve"
 )

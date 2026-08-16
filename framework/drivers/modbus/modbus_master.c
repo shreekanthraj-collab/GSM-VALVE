@@ -4,6 +4,9 @@
 
 #include "drv_rs485.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 
 /* -------------------------------------------------------------------------- */
 /* Constants                                                                  */
@@ -17,17 +20,18 @@
 #define MODBUS_MIN_FRAME                4U
 #define MODBUS_MAX_REGISTERS_DEFAULT    125U
 #define MODBUS_MAX_REGISTERS_WRITE      123U
+#define MODBUS_REGISTER_ADDRESS_SPACE   65536U
 
 #define MODBUS_EXCEPTION_MASK           0x80U
 
-#define MODBUS_EXCEPTION_ILLEGAL_FUNCTION    0x01U
-#define MODBUS_EXCEPTION_ILLEGAL_ADDRESS     0x02U
-#define MODBUS_EXCEPTION_ILLEGAL_VALUE       0x03U
-#define MODBUS_EXCEPTION_DEVICE_FAILURE      0x04U
-#define MODBUS_EXCEPTION_ACKNOWLEDGE         0x05U
-#define MODBUS_EXCEPTION_DEVICE_BUSY        0x06U
-#define MODBUS_EXCEPTION_NEGATIVE_ACK        0x07U
-#define MODBUS_EXCEPTION_MEMORY_PARITY       0x08U
+#define MODBUS_EXCEPTION_ILLEGAL_FUNCTION  0x01U
+#define MODBUS_EXCEPTION_ILLEGAL_ADDRESS   0x02U
+#define MODBUS_EXCEPTION_ILLEGAL_VALUE     0x03U
+#define MODBUS_EXCEPTION_DEVICE_FAILURE    0x04U
+#define MODBUS_EXCEPTION_ACKNOWLEDGE       0x05U
+#define MODBUS_EXCEPTION_DEVICE_BUSY       0x06U
+#define MODBUS_EXCEPTION_NEGATIVE_ACK      0x07U
+#define MODBUS_EXCEPTION_MEMORY_PARITY     0x08U
 
 
 /* -------------------------------------------------------------------------- */
@@ -35,6 +39,8 @@
 /* -------------------------------------------------------------------------- */
 
 static bool s_initialized = false;
+
+static SemaphoreHandle_t s_transaction_mutex = NULL;
 
 static modbus_master_config_t s_config = {
     .slave_address = MODBUS_DEFAULT_SLAVE,
@@ -52,8 +58,9 @@ static bool valid_slave_address(
 {
     /*
      * Modbus RTU slave addresses 1..247 are valid.
-     * 0 is the broadcast address and is not supported by
-     * this request/response master API.
+     *
+     * Address 0 is the broadcast address and is not supported
+     * by this request/response master API.
      */
     return slave_address >= 1U &&
            slave_address <= 247U;
@@ -84,8 +91,30 @@ static bool valid_config(
 }
 
 
+static bool valid_register_range(
+    uint16_t start_register,
+    uint16_t register_count)
+{
+    if (register_count == 0U) {
+        return false;
+    }
+
+    /*
+     * Modbus register addresses are 16-bit.
+     *
+     * A block starting at 65535 may contain only one register.
+     * Prevent the configured block from extending beyond
+     * address 65535.
+     */
+    return ((uint32_t)start_register +
+            (uint32_t)register_count) <=
+           MODBUS_REGISTER_ADDRESS_SPACE;
+}
+
+
 static bool valid_read_request(
     uint8_t slave_address,
+    uint16_t start_register,
     uint16_t register_count)
 {
     if (!valid_slave_address(slave_address)) {
@@ -97,12 +126,19 @@ static bool valid_read_request(
         return false;
     }
 
+    if (!valid_register_range(
+            start_register,
+            register_count)) {
+        return false;
+    }
+
     return true;
 }
 
 
 static bool valid_write_multiple_request(
     uint8_t slave_address,
+    uint16_t start_register,
     uint16_t register_count)
 {
     if (!valid_slave_address(slave_address)) {
@@ -115,6 +151,12 @@ static bool valid_write_multiple_request(
     }
 
     if (register_count > s_config.max_registers) {
+        return false;
+    }
+
+    if (!valid_register_range(
+            start_register,
+            register_count)) {
         return false;
     }
 
@@ -237,6 +279,8 @@ static esp_err_t map_exception(
 /* -------------------------------------------------------------------------- */
 
 static esp_err_t receive_response(
+    uint8_t expected_slave_address,
+    uint8_t expected_function,
     uint8_t *response,
     size_t response_capacity,
     size_t *response_length)
@@ -269,8 +313,28 @@ static esp_err_t receive_response(
         return ESP_ERR_INVALID_CRC;
     }
 
+    /*
+     * Every valid Modbus response must come from the
+     * slave requested by this transaction.
+     */
+    if (response[0] != expected_slave_address) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    /*
+     * Exception response:
+     *
+     * Normal function = 0x03
+     * Exception function = 0x83
+     */
     if ((response[1] &
          MODBUS_EXCEPTION_MASK) != 0U) {
+
+        if (response[1] !=
+            (uint8_t)(expected_function |
+                      MODBUS_EXCEPTION_MASK)) {
+            return ESP_ERR_INVALID_RESPONSE;
+        }
 
         if (*response_length != 5U) {
             return ESP_ERR_INVALID_RESPONSE;
@@ -278,6 +342,14 @@ static esp_err_t receive_response(
 
         return map_exception(
             response[2]);
+    }
+
+    /*
+     * A normal response must belong to the function
+     * requested by the transaction.
+     */
+    if (response[1] != expected_function) {
+        return ESP_ERR_INVALID_RESPONSE;
     }
 
     return ESP_OK;
@@ -289,6 +361,8 @@ static esp_err_t receive_response(
 /* -------------------------------------------------------------------------- */
 
 static esp_err_t exchange(
+    uint8_t expected_slave_address,
+    uint8_t expected_function,
     const uint8_t *request,
     size_t request_length,
     uint8_t *response,
@@ -301,17 +375,55 @@ static esp_err_t exchange(
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (!valid_slave_address(
+            expected_slave_address)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (expected_function == 0U ||
+        (expected_function &
+         MODBUS_EXCEPTION_MASK) != 0U) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
     if (response == NULL ||
         response_length == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (response_capacity < MODBUS_MIN_FRAME) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_transaction_mutex == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     *response_length = 0U;
+
+    /*
+     * A Modbus RTU transaction must be atomic at the
+     * request/response level.
+     *
+     * Protect:
+     *
+     *     flush -> write -> read
+     *
+     * so two callers cannot interleave transactions
+     * on the same RS485 bus.
+     */
+    if (xSemaphoreTake(
+            s_transaction_mutex,
+            portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
 
     esp_err_t err =
         drv_rs485_flush_rx();
 
     if (err != ESP_OK) {
+        (void)xSemaphoreGive(
+            s_transaction_mutex);
         return err;
     }
 
@@ -324,17 +436,29 @@ static esp_err_t exchange(
             &bytes_written);
 
     if (err != ESP_OK) {
+        (void)xSemaphoreGive(
+            s_transaction_mutex);
         return err;
     }
 
     if (bytes_written != request_length) {
+        (void)xSemaphoreGive(
+            s_transaction_mutex);
         return ESP_ERR_INVALID_STATE;
     }
 
-    return receive_response(
-        response,
-        response_capacity,
-        response_length);
+    err =
+        receive_response(
+            expected_slave_address,
+            expected_function,
+            response,
+            response_capacity,
+            response_length);
+
+    (void)xSemaphoreGive(
+        s_transaction_mutex);
+
+    return err;
 }
 
 
@@ -418,7 +542,20 @@ esp_err_t modbus_master_init(
         return ESP_ERR_INVALID_STATE;
     }
 
+    /*
+     * Create the transaction mutex before exposing the
+     * master as initialized.
+     */
+    SemaphoreHandle_t mutex =
+        xSemaphoreCreateMutex();
+
+    if (mutex == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
     s_config = *config;
+
+    s_transaction_mutex = mutex;
 
     s_initialized = true;
 
@@ -432,6 +569,36 @@ esp_err_t modbus_master_deinit(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    /*
+     * The master must not be deinitialized while a transaction
+     * is active. Wait for the current transaction to complete,
+     * then release the mutex.
+     */
+    if (s_transaction_mutex == NULL) {
+        s_initialized = false;
+
+        s_config.slave_address =
+            MODBUS_DEFAULT_SLAVE;
+
+        s_config.timeout_ms = 1000U;
+
+        s_config.max_registers =
+            MODBUS_MAX_REGISTERS_DEFAULT;
+
+        return ESP_OK;
+    }
+
+    if (xSemaphoreTake(
+            s_transaction_mutex,
+            portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    SemaphoreHandle_t mutex =
+        s_transaction_mutex;
+
+    s_transaction_mutex = NULL;
+
     s_initialized = false;
 
     s_config.slave_address =
@@ -441,6 +608,10 @@ esp_err_t modbus_master_deinit(void)
 
     s_config.max_registers =
         MODBUS_MAX_REGISTERS_DEFAULT;
+
+    (void)xSemaphoreGive(mutex);
+
+    vSemaphoreDelete(mutex);
 
     return ESP_OK;
 }
@@ -466,6 +637,7 @@ esp_err_t modbus_read_holding_registers(
 
     if (!valid_read_request(
             slave_address,
+            start_register,
             register_count)) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -495,6 +667,8 @@ esp_err_t modbus_read_holding_registers(
 
     esp_err_t err =
         exchange(
+            slave_address,
+            MODBUS_FUNCTION_READ_HOLDING,
             request,
             sizeof(request),
             response,
@@ -535,6 +709,7 @@ esp_err_t modbus_read_input_registers(
 
     if (!valid_read_request(
             slave_address,
+            start_register,
             register_count)) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -564,6 +739,8 @@ esp_err_t modbus_read_input_registers(
 
     esp_err_t err =
         exchange(
+            slave_address,
+            MODBUS_FUNCTION_READ_INPUT,
             request,
             sizeof(request),
             response,
@@ -626,6 +803,8 @@ esp_err_t modbus_write_single_register(
 
     esp_err_t err =
         exchange(
+            slave_address,
+            MODBUS_FUNCTION_WRITE_SINGLE,
             request,
             sizeof(request),
             response,
@@ -675,6 +854,7 @@ esp_err_t modbus_write_multiple_registers(
 
     if (!valid_write_multiple_request(
             slave_address,
+            start_register,
             register_count)) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -737,6 +917,8 @@ esp_err_t modbus_write_multiple_registers(
 
     esp_err_t err =
         exchange(
+            slave_address,
+            MODBUS_FUNCTION_WRITE_MULTIPLE,
             request,
             frame_length,
             response,
