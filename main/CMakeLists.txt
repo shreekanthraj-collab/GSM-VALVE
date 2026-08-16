@@ -14,6 +14,7 @@
         "../framework/drivers/as5600/drv_as5600.c"
         "../framework/drivers/ina226/drv_ina226.c"
         "../framework/drivers/rs485/drv_rs485.c"
+        "../framework/drivers/modbus/modbus_master.c"
 
         "../framework/managers/encoder/encoder_manager.c"
         "../framework/managers/encoder_persistence/encoder_persistence_manager.c"
@@ -27,6 +28,7 @@
         "../framework/drivers/as5600"
         "../framework/drivers/ina226"
         "../framework/drivers/rs485"
+        "../framework/drivers/modbus"
         "../framework/managers/encoder"
         "../framework/managers/encoder_persistence"
         "../framework/managers/encoder_position"
