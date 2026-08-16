@@ -8,14 +8,14 @@
  * changing application/controller logic.
  */
 
+#define BOARD_RS485_TX_GPIO          15
+#define BOARD_RS485_RX_GPIO          16
+#define BOARD_RS485_DE_GPIO          19
+
 #define BOARD_MOTOR_POWER_GPIO       (-1)
 #define BOARD_MOTOR_FORWARD_GPIO     (-1)
 #define BOARD_MOTOR_REVERSE_GPIO     (-1)
 #define BOARD_MOTOR_PWM_GPIO         (-1)
-
-#define BOARD_RS485_TX_GPIO          (-1)
-#define BOARD_RS485_RX_GPIO          (-1)
-#define BOARD_RS485_DE_GPIO          (-1)
 
 #define BOARD_LIMIT_SWITCH_GPIO      (-1)
 #define BOARD_RTC_INT_GPIO           (-1)
