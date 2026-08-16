@@ -7,6 +7,12 @@
 #include "hal_nvs.h"
 #include "rtc_manager.h"
 
+#include "drv_as5600.h"
+
+#include "encoder_manager.h"
+#include "encoder_persistence_manager.h"
+#include "encoder_position_manager.h"
+
 
 /* -------------------------------------------------------------------------- */
 /* Application                                                                */
@@ -91,6 +97,95 @@ static esp_err_t app_init(void)
         TAG,
         "RTC manager initialized");
 
+    /*
+     * Initialize the AS5600 driver.
+     *
+     * The AS5600 uses the shared I2C bus at address 0x36.
+     */
+    const drv_as5600_config_t as5600_config = {
+        .i2c_address = DRV_AS5600_I2C_ADDRESS
+    };
+
+    err = drv_as5600_init(&as5600_config);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "AS5600 initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "AS5600 initialized");
+
+    /*
+     * Initialize the wrap-aware encoder manager.
+     */
+    err = encoder_manager_init();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Encoder manager initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Encoder manager initialized");
+
+    /*
+     * Initialize encoder persistence.
+     *
+     * NVS has already been initialized above.
+     */
+    err = encoder_persistence_init();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Encoder persistence initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Encoder persistence initialized");
+
+    /*
+     * Initialize absolute encoder position management.
+     *
+     * This depends on:
+     *   - AS5600 driver
+     *   - encoder manager
+     *   - encoder persistence
+     */
+    err = encoder_position_init();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Encoder position initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Encoder position manager initialized");
+
+    /*
+     * Position restore/live sampling is intentionally
+     * handled separately from initialization.
+     */
     return ESP_OK;
 }
 
