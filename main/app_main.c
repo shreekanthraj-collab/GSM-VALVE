@@ -183,9 +183,91 @@ static esp_err_t app_init(void)
         "Encoder position manager initialized");
 
     /*
-     * Position restore/live sampling is intentionally
-     * handled separately from initialization.
+     * Restore the previously persisted absolute position.
+     *
+     * ESP_ERR_NOT_FOUND is a normal first-boot condition.
      */
+    err = encoder_position_restore();
+
+    if (err == ESP_ERR_NOT_FOUND) {
+
+        ESP_LOGI(
+            TAG,
+            "No persisted encoder position found");
+
+    } else if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Encoder position restore failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+
+    } else {
+
+        ESP_LOGI(
+            TAG,
+            "Encoder position restored");
+
+    }
+
+    /*
+     * Read the first live AS5600 angle.
+     *
+     * encoder_position_update() deliberately treats this
+     * first sample as the new live reference and therefore
+     * does not create movement relative to the persisted
+     * last_angle.
+     */
+    uint16_t angle = 0U;
+
+    err = drv_as5600_read_angle(&angle);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Initial AS5600 read failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    err = encoder_position_update(angle);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Initial encoder position update failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    /*
+     * Report the resulting position for diagnostics.
+     */
+    encoder_position_state_t position = {0};
+
+    err = encoder_position_get_state(&position);
+
+    if (err != ESP_OK) {
+        ESP_LOGE(
+            TAG,
+            "Encoder position state read failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Encoder position: angle=%u total_angle=%lld turns=%.4f restored=%s",
+        (unsigned)position.angle,
+        (long long)position.total_angle,
+        (double)position.total_turns,
+        position.restored ? "yes" : "no");
+
     return ESP_OK;
 }
 
