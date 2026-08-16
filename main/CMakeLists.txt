@@ -10,13 +10,17 @@
         "../framework/hal/hal_spi.c"
         "../framework/hal/hal_uart.c"
         "../framework/drivers/as5600/drv_as5600.c"
+        "../framework/drivers/ina226/drv_ina226.c"
         "../framework/managers/encoder/encoder_manager.c"
         "../framework/managers/encoder_persistence/encoder_persistence_manager.c"
+        "../framework/managers/encoder_position/encoder_position_manager.c"
     INCLUDE_DIRS
         "."
         "../framework/hal"
         "../framework/drivers/as5600"
+        "../framework/drivers/ina226"
         "../framework/managers/encoder"
         "../framework/managers/encoder_persistence"
+        "../framework/managers/encoder_position"
         "../boards/gsm_valve"
 )
