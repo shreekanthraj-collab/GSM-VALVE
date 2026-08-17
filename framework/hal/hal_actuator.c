@@ -1,9 +1,18 @@
 #include "hal_actuator.h"
 
+#include "board_config.h"
 #include "driver/ledc.h"
 
 #include "hal_gpio.h"
 #include "hal_pwm.h"
+
+
+/* -------------------------------------------------------------------------- */
+/* Internal constants                                                         */
+/* -------------------------------------------------------------------------- */
+
+#define HAL_ACTUATOR_PWM_CHANNEL    LEDC_CHANNEL_0
+#define HAL_ACTUATOR_PWM_TIMER      LEDC_TIMER_0
 
 
 /* -------------------------------------------------------------------------- */
@@ -32,19 +41,22 @@ static bool valid_config(
         return false;
     }
 
-    if (config->power_gpio < 0 ||
-        config->forward_gpio < 0 ||
-        config->reverse_gpio < 0 ||
-        config->pwm_gpio < 0) {
-        return false;
-    }
-
     if (config->pwm_frequency_hz == 0U) {
         return false;
     }
 
     if (config->pwm_resolution_bits == 0U ||
-        config->pwm_resolution_bits > 20U) {
+        config->pwm_resolution_bits >= LEDC_TIMER_BIT_MAX) {
+        return false;
+    }
+
+    /*
+     * The physical PWM GPIO belongs to the board layer.
+     *
+     * A value of -1 means the board mapping is not yet defined.
+     */
+    if (BOARD_MOTOR_PWM_GPIO < 0 ||
+        BOARD_MOTOR_PWM_GPIO >= GPIO_NUM_MAX) {
         return false;
     }
 
@@ -71,6 +83,8 @@ esp_err_t hal_actuator_init(
 
     /*
      * Configure motor control GPIO signals through the GPIO HAL.
+     *
+     * Physical GPIO numbers remain owned by board_config.h / hal_gpio.c.
      */
     esp_err_t err =
         hal_gpio_configure(
@@ -103,27 +117,20 @@ esp_err_t hal_actuator_init(
     }
 
     /*
-     * PWM ownership remains inside HAL PWM.
-     *
-     * The board layer supplies the actual LEDC channel/timer
-     * through the configuration.
-     *
-     * The GPIO number stored in hal_actuator_config_t is retained
-     * for board-level documentation/validation, while HAL GPIO
-     * owns the logical motor signals.
+     * Configure PWM through the dedicated PWM HAL.
      */
     hal_pwm_config_t pwm_config = {
         .speed_mode =
             LEDC_LOW_SPEED_MODE,
 
         .channel =
-            LEDC_CHANNEL_0,
+            HAL_ACTUATOR_PWM_CHANNEL,
 
         .gpio_num =
-            config->pwm_gpio,
+            BOARD_MOTOR_PWM_GPIO,
 
         .timer =
-            LEDC_TIMER_0,
+            HAL_ACTUATOR_PWM_TIMER,
 
         .duty_resolution =
             (ledc_timer_bit_t)
@@ -141,7 +148,7 @@ esp_err_t hal_actuator_init(
     }
 
     /*
-     * Always enter the hardware in a safe state.
+     * Always enter a safe stopped state.
      */
     err =
         hal_gpio_write(
@@ -149,7 +156,7 @@ esp_err_t hal_actuator_init(
             HAL_GPIO_LEVEL_LOW);
 
     if (err != ESP_OK) {
-        return err;
+        goto init_fail;
     }
 
     err =
@@ -158,7 +165,7 @@ esp_err_t hal_actuator_init(
             HAL_GPIO_LEVEL_LOW);
 
     if (err != ESP_OK) {
-        return err;
+        goto init_fail;
     }
 
     err =
@@ -167,15 +174,15 @@ esp_err_t hal_actuator_init(
             HAL_GPIO_LEVEL_LOW);
 
     if (err != ESP_OK) {
-        return err;
+        goto init_fail;
     }
 
     err =
         hal_pwm_disable(
-            LEDC_CHANNEL_0);
+            HAL_ACTUATOR_PWM_CHANNEL);
 
     if (err != ESP_OK) {
-        return err;
+        goto init_fail;
     }
 
     s_power_enabled = false;
@@ -185,6 +192,17 @@ esp_err_t hal_actuator_init(
     s_initialized = true;
 
     return ESP_OK;
+
+
+init_fail:
+    /*
+     * Release the PWM resource if initialization after
+     * hal_pwm_init() fails.
+     */
+    (void)hal_pwm_deinit(
+        HAL_ACTUATOR_PWM_CHANNEL);
+
+    return err;
 }
 
 
@@ -208,7 +226,7 @@ esp_err_t hal_actuator_deinit(
 
     err =
         hal_pwm_deinit(
-            LEDC_CHANNEL_0);
+            HAL_ACTUATOR_PWM_CHANNEL);
 
     if (err != ESP_OK) {
         return err;
@@ -231,9 +249,6 @@ esp_err_t hal_actuator_set_power(
         return ESP_ERR_INVALID_STATE;
     }
 
-    /*
-     * Motor power is controlled through GPIO HAL.
-     */
     esp_err_t err =
         hal_gpio_write(
             HAL_GPIO_SIGNAL_MOTOR_POWER,
@@ -249,9 +264,7 @@ esp_err_t hal_actuator_set_power(
 
     if (!enabled) {
         s_running = false;
-
-        s_state =
-            HAL_ACTUATOR_STATE_IDLE;
+        s_state = HAL_ACTUATOR_STATE_IDLE;
     }
 
     return ESP_OK;
@@ -273,7 +286,6 @@ esp_err_t hal_actuator_set_forward(
      * Never permit both directions simultaneously.
      */
     if (enabled) {
-
         esp_err_t err =
             hal_gpio_write(
                 HAL_GPIO_SIGNAL_MOTOR_REVERSE,
@@ -303,7 +315,6 @@ esp_err_t hal_actuator_set_reverse(
      * Never permit both directions simultaneously.
      */
     if (enabled) {
-
         esp_err_t err =
             hal_gpio_write(
                 HAL_GPIO_SIGNAL_MOTOR_FORWARD,
@@ -334,7 +345,7 @@ esp_err_t hal_actuator_set_pwm(
     }
 
     return hal_pwm_set_duty(
-        LEDC_CHANNEL_0,
+        HAL_ACTUATOR_PWM_CHANNEL,
         duty_percent);
 }
 
@@ -370,7 +381,7 @@ esp_err_t hal_actuator_start_open(
 
     err =
         hal_pwm_set_duty(
-            LEDC_CHANNEL_0,
+            HAL_ACTUATOR_PWM_CHANNEL,
             duty_percent);
 
     if (err != ESP_OK) {
@@ -379,16 +390,14 @@ esp_err_t hal_actuator_start_open(
 
     err =
         hal_pwm_enable(
-            LEDC_CHANNEL_0);
+            HAL_ACTUATOR_PWM_CHANNEL);
 
     if (err != ESP_OK) {
         return err;
     }
 
     s_running = true;
-
-    s_state =
-        HAL_ACTUATOR_STATE_OPENING;
+    s_state = HAL_ACTUATOR_STATE_OPENING;
 
     return ESP_OK;
 }
@@ -425,7 +434,7 @@ esp_err_t hal_actuator_start_close(
 
     err =
         hal_pwm_set_duty(
-            LEDC_CHANNEL_0,
+            HAL_ACTUATOR_PWM_CHANNEL,
             duty_percent);
 
     if (err != ESP_OK) {
@@ -434,16 +443,14 @@ esp_err_t hal_actuator_start_close(
 
     err =
         hal_pwm_enable(
-            LEDC_CHANNEL_0);
+            HAL_ACTUATOR_PWM_CHANNEL);
 
     if (err != ESP_OK) {
         return err;
     }
 
     s_running = true;
-
-    s_state =
-        HAL_ACTUATOR_STATE_CLOSING;
+    s_state = HAL_ACTUATOR_STATE_CLOSING;
 
     return ESP_OK;
 }
@@ -465,14 +472,13 @@ esp_err_t hal_actuator_stop(
      */
     esp_err_t err =
         hal_pwm_disable(
-            LEDC_CHANNEL_0);
+            HAL_ACTUATOR_PWM_CHANNEL);
 
     if (err != ESP_OK) {
         return err;
     }
 
-    s_state =
-        HAL_ACTUATOR_STATE_STOPPING;
+    s_state = HAL_ACTUATOR_STATE_STOPPING;
 
     /*
      * Remove both direction commands.
@@ -492,9 +498,7 @@ esp_err_t hal_actuator_stop(
     }
 
     s_running = false;
-
-    s_state =
-        HAL_ACTUATOR_STATE_IDLE;
+    s_state = HAL_ACTUATOR_STATE_IDLE;
 
     return ESP_OK;
 }
@@ -516,7 +520,7 @@ esp_err_t hal_actuator_force_safe(
      */
     esp_err_t err =
         hal_pwm_disable(
-            LEDC_CHANNEL_0);
+            HAL_ACTUATOR_PWM_CHANNEL);
 
     if (err != ESP_OK) {
         return err;
@@ -557,9 +561,7 @@ esp_err_t hal_actuator_force_safe(
 
     s_power_enabled = false;
     s_running = false;
-
-    s_state =
-        HAL_ACTUATOR_STATE_IDLE;
+    s_state = HAL_ACTUATOR_STATE_IDLE;
 
     return ESP_OK;
 }
@@ -580,8 +582,7 @@ esp_err_t hal_actuator_get_state(
         return ESP_ERR_INVALID_ARG;
     }
 
-    *state =
-        s_state;
+    *state = s_state;
 
     return ESP_OK;
 }

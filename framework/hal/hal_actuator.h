@@ -36,17 +36,9 @@ typedef enum
 typedef struct
 {
     /*
-     * GPIO assignments are deliberately supplied by the board layer.
-     *
-     * The HAL does not assume the final PCB pin map.
-     */
-    int power_gpio;
-    int forward_gpio;
-    int reverse_gpio;
-    int pwm_gpio;
-
-    /*
      * PWM configuration.
+     *
+     * Physical GPIO mapping is owned by the board/HAL layers.
      */
     uint32_t pwm_frequency_hz;
     uint8_t pwm_resolution_bits;
@@ -55,13 +47,15 @@ typedef struct
 
 
 /* -------------------------------------------------------------------------- */
-/* Initialization                                                              */
+/* Initialization                                                             */
 /* -------------------------------------------------------------------------- */
 
 /*
  * Initialize the actuator hardware abstraction.
  *
  * No motor movement is performed by initialization.
+ *
+ * The actuator enters a safe stopped state.
  */
 esp_err_t hal_actuator_init(
     const hal_actuator_config_t *config);
@@ -71,14 +65,14 @@ esp_err_t hal_actuator_init(
  * Deinitialize actuator hardware.
  *
  * The actuator is forced to a safe stopped state before
- * hardware resources are released.
+ * PWM resources are released.
  */
 esp_err_t hal_actuator_deinit(
     void);
 
 
 /* -------------------------------------------------------------------------- */
-/* Power control                                                               */
+/* Power control                                                              */
 /* -------------------------------------------------------------------------- */
 
 /*
@@ -89,13 +83,11 @@ esp_err_t hal_actuator_set_power(
 
 
 /* -------------------------------------------------------------------------- */
-/* Direction control                                                           */
+/* Direction control                                                          */
 /* -------------------------------------------------------------------------- */
 
 /*
  * Command forward/open direction.
- *
- * Direction pins are controlled by the HAL.
  */
 esp_err_t hal_actuator_set_forward(
     bool enabled);
@@ -103,15 +95,13 @@ esp_err_t hal_actuator_set_forward(
 
 /*
  * Command reverse/close direction.
- *
- * Direction pins are controlled by the HAL.
  */
 esp_err_t hal_actuator_set_reverse(
     bool enabled);
 
 
 /* -------------------------------------------------------------------------- */
-/* PWM control                                                                 */
+/* PWM control                                                                */
 /* -------------------------------------------------------------------------- */
 
 /*
@@ -125,7 +115,7 @@ esp_err_t hal_actuator_set_pwm(
 
 
 /* -------------------------------------------------------------------------- */
-/* Combined motor operations                                                   */
+/* Combined motor operations                                                  */
 /* -------------------------------------------------------------------------- */
 
 /*
@@ -152,7 +142,8 @@ esp_err_t hal_actuator_stop(
 /*
  * Force the actuator into a safe hardware state.
  *
- * This must remove motor power and direction drive.
+ * PWM is disabled, both directions are removed,
+ * and motor power is disabled.
  */
 esp_err_t hal_actuator_force_safe(
     void);
