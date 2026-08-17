@@ -24,6 +24,7 @@
         "../framework/managers/modbus_devices/modbus_device_manager.c"
         "../framework/managers/scheduling/scheduling_manager.c"
         "../framework/managers/condition_monitor/condition_monitor_manager.c"
+        "../framework/managers/safety/safety_manager.c"
 
     INCLUDE_DIRS
         "."
@@ -40,5 +41,6 @@
         "../framework/managers/modbus_devices"
         "../framework/managers/scheduling"
         "../framework/managers/condition_monitor"
+        "../framework/managers/safety"
         "../boards/gsm_valve"
 )
