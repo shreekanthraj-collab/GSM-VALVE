@@ -109,6 +109,10 @@ static esp_err_t write_register(
 esp_err_t drv_ina226_init(
     const drv_ina226_config_t *config)
 {
+    if (s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!valid_config(config)) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -125,6 +129,11 @@ esp_err_t drv_ina226_init(
         return err;
     }
 
+    /*
+     * INA226 calibration:
+     *
+     * CAL = 0.00512 / (Current_LSB * R_SHUNT)
+     */
     float calibration =
         0.00512f /
         (config->current_lsb_a *
@@ -142,18 +151,21 @@ esp_err_t drv_ina226_init(
         config->config_register;
 
     /*
-     * INA226 default configuration:
-     * continuous shunt and bus conversion,
-     * 1.1 ms conversion time,
-     * 16 averaging.
+     * Default configuration:
+     *
+     * Continuous shunt conversion
+     * Continuous bus conversion
+     * 1.1 ms conversion time
+     * 16 sample averaging
      */
     if (config_register == 0U) {
         config_register = 0x4527U;
     }
 
     /*
-     * Temporarily mark the driver initialized so
-     * register access helpers can be used.
+     * Store configuration before register access because
+     * the register helpers require the driver to be marked
+     * initialized.
      */
     s_i2c_address =
         config->i2c_address;
@@ -163,6 +175,9 @@ esp_err_t drv_ina226_init(
 
     s_current_lsb_a =
         config->current_lsb_a;
+
+    s_config_register =
+        config_register;
 
     s_initialized = true;
 
@@ -185,9 +200,6 @@ esp_err_t drv_ina226_init(
         s_initialized = false;
         return err;
     }
-
-    s_config_register =
-        config_register;
 
     return ESP_OK;
 }
@@ -406,10 +418,6 @@ esp_err_t drv_ina226_read_current(
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (s_current_lsb_a <= 0.0f) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
     int16_t raw = 0;
 
     esp_err_t err =
@@ -420,6 +428,11 @@ esp_err_t drv_ina226_read_current(
         return err;
     }
 
+    /*
+     * INA226 current register:
+     *
+     * Current[A] = Current_Register * Current_LSB
+     */
     *current_a =
         (float)raw *
         s_current_lsb_a;
@@ -439,10 +452,6 @@ esp_err_t drv_ina226_read_power(
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (s_current_lsb_a <= 0.0f) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
     uint16_t raw = 0U;
 
     esp_err_t err =
@@ -453,16 +462,23 @@ esp_err_t drv_ina226_read_power(
         return err;
     }
 
+    /*
+     * INA226 power LSB is 25 * Current_LSB.
+     */
+    float power_lsb_w =
+        25.0f *
+        s_current_lsb_a;
+
     *power_w =
         (float)raw *
-        (25.0f * s_current_lsb_a);
+        power_lsb_w;
 
     return ESP_OK;
 }
 
 
 /* -------------------------------------------------------------------------- */
-/* Combined reading                                                            */
+/* Combined measurement                                                        */
 /* -------------------------------------------------------------------------- */
 
 esp_err_t drv_ina226_read(
@@ -476,9 +492,16 @@ esp_err_t drv_ina226_read(
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err =
+    int16_t shunt_voltage_raw = 0;
+    uint16_t bus_voltage_raw = 0U;
+    int16_t current_raw = 0;
+    uint16_t power_raw = 0U;
+
+    esp_err_t err;
+
+    err =
         drv_ina226_read_shunt_voltage_raw(
-            &reading->shunt_voltage_raw);
+            &shunt_voltage_raw);
 
     if (err != ESP_OK) {
         return err;
@@ -486,7 +509,7 @@ esp_err_t drv_ina226_read(
 
     err =
         drv_ina226_read_bus_voltage_raw(
-            &reading->bus_voltage_raw);
+            &bus_voltage_raw);
 
     if (err != ESP_OK) {
         return err;
@@ -494,7 +517,7 @@ esp_err_t drv_ina226_read(
 
     err =
         drv_ina226_read_current_raw(
-            &reading->current_raw);
+            &current_raw);
 
     if (err != ESP_OK) {
         return err;
@@ -502,26 +525,38 @@ esp_err_t drv_ina226_read(
 
     err =
         drv_ina226_read_power_raw(
-            &reading->power_raw);
+            &power_raw);
 
     if (err != ESP_OK) {
         return err;
     }
 
+    reading->shunt_voltage_raw =
+        shunt_voltage_raw;
+
+    reading->bus_voltage_raw =
+        bus_voltage_raw;
+
+    reading->current_raw =
+        current_raw;
+
+    reading->power_raw =
+        power_raw;
+
     reading->shunt_voltage_v =
-        (float)reading->shunt_voltage_raw *
+        (float)shunt_voltage_raw *
         DRV_INA226_SHUNT_VOLTAGE_LSB_V;
 
     reading->bus_voltage_v =
-        (float)reading->bus_voltage_raw *
+        (float)bus_voltage_raw *
         DRV_INA226_BUS_VOLTAGE_LSB_V;
 
     reading->current_a =
-        (float)reading->current_raw *
+        (float)current_raw *
         s_current_lsb_a;
 
     reading->power_w =
-        (float)reading->power_raw *
+        (float)power_raw *
         (25.0f * s_current_lsb_a);
 
     return ESP_OK;
@@ -614,7 +649,7 @@ esp_err_t drv_ina226_probe(void)
 
 
 /* -------------------------------------------------------------------------- */
-/* State                                                                       */
+/* Status                                                                      */
 /* -------------------------------------------------------------------------- */
 
 bool drv_ina226_is_initialized(void)
