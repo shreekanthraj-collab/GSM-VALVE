@@ -3,6 +3,7 @@
         "app_main.c"
 
         "../framework/hal/hal_adc.c"
+        "../framework/hal/hal_actuator.c"
         "../framework/hal/hal_gpio.c"
         "../framework/hal/hal_i2c.c"
         "../framework/hal/hal_nvs.c"
