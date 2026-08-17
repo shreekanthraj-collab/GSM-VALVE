@@ -11,23 +11,21 @@ extern "C" {
 
 
 /* -------------------------------------------------------------------------- */
-/* Configuration                                                              */
-/* -------------------------------------------------------------------------- */
-
-#define CONDITION_MONITOR_DEFAULT_OC_MAX_ATTEMPTS  3U
-
-
-/* -------------------------------------------------------------------------- */
 /* Voltage state                                                              */
 /* -------------------------------------------------------------------------- */
 
 typedef enum
 {
     CONDITION_VOLTAGE_UNKNOWN = 0,
+
     CONDITION_VOLTAGE_NORMAL,
+
     CONDITION_VOLTAGE_WARNING,
+
     CONDITION_VOLTAGE_WAIT_BYPASS,
+
     CONDITION_VOLTAGE_BYPASS_ACTIVE,
+
     CONDITION_VOLTAGE_LOCKED
 
 } condition_monitor_voltage_state_t;
@@ -40,7 +38,9 @@ typedef enum
 typedef enum
 {
     CONDITION_CURRENT_NORMAL = 0,
+
     CONDITION_CURRENT_OVERCURRENT,
+
     CONDITION_CURRENT_LOCKED
 
 } condition_monitor_current_state_t;
@@ -54,9 +54,22 @@ typedef struct
 {
     /*
      * INA226 bus-voltage thresholds.
+     *
+     * warn_voltage_low_v:
+     *     Low-voltage warning threshold.
+     *
+     * cut_voltage_v:
+     *     Motor cut/bypass threshold.
+     *
+     * critical_voltage_v:
+     *     Hard voltage-lock threshold.
+     *
+     * reset_voltage_v:
+     *     Recovery threshold for locked/bypass voltage states.
+     *
+     * No high-voltage warning threshold is used.
      */
     float warn_voltage_low_v;
-    float warn_voltage_high_v;
     float cut_voltage_v;
     float critical_voltage_v;
     float reset_voltage_v;
@@ -251,6 +264,9 @@ esp_err_t condition_monitor_manager_get_config(
  * Update runtime configuration.
  *
  * Persistence and MQTT transport are handled by higher layers.
+ *
+ * The voltage thresholds in condition_monitor_config_t are therefore
+ * intentionally exposed to the higher configuration layer.
  */
 esp_err_t condition_monitor_manager_set_config(
     const condition_monitor_config_t *config);
