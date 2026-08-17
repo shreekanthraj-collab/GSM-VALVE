@@ -1,16 +1,0 @@
-[1/10] Performing build step for 'bootloader'
-[1/1] cmd.exe /C "cd /D "C:\Users\Shreekanth Raj\Documents\GSM-VALVE\build\bootloader\esp-idf\esptool_py" && C:\Espressif\python_env\idf5.3_py3.11_env\Scripts\python.exe C:/Espressif/frameworks/esp-idf-v5.3.1/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 "C:/Users/Shreekanth Raj/Documents/GSM-VALVE/build/bootloader/bootloader.bin""
-Bootloader binary size 0x5260 bytes. 0x2da0 bytes (36%) free.
-[2/8] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/__/framework/hal/hal_gpio.c.obj
-[3/8] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/__/framework/hal/hal_i2c.c.obj
-[4/8] Linking C static library esp-idf\main\libmain.a
-[5/8] Generating ld/sections.ld
-[6/8] Linking CXX executable gsm_valve.elf
-[7/8] Generating binary image from built executable
-esptool.py v4.8.1
-Creating esp32s3 image...
-Merged 2 ELF sections
-Successfully created esp32s3 image.
-Generated C:/Users/Shreekanth Raj/Documents/GSM-VALVE/build/gsm_valve.bin
-[8/8] cmd.exe /C "cd /D "C:\Users\Shreekanth Raj\Documents\GSM-VALVE\build\esp-idf\esptool_py" && C:\Espressif\python_env\idf5.3_py3.11_env\Scripts\python.exe C:/Espressif/frameworks/esp-idf-v5.3.1/components/partition_table/check_sizes.py --offset 0x8000 partition --type app "C:/Users/Shreekanth Raj/Documents/GSM-VALVE/build/partition_table/partition-table.bin" "C:/Users/Shreekanth Raj/Documents/GSM-VALVE/build/gsm_valve.bin""
-gsm_valve.bin binary size 0x32740 bytes. Smallest app partition is 0x100000 bytes. 0xcd8c0 bytes (80%) free.
