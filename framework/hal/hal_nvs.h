@@ -11,6 +11,11 @@
 extern "C" {
 #endif
 
+
+/* -------------------------------------------------------------------------- */
+/* Initialization                                                             */
+/* -------------------------------------------------------------------------- */
+
 /*
  * Initialize the NVS subsystem.
  *
@@ -19,6 +24,10 @@ extern "C" {
  */
 esp_err_t hal_nvs_init(void);
 
+
+/* -------------------------------------------------------------------------- */
+/* Namespace                                                                  */
+/* -------------------------------------------------------------------------- */
 
 /*
  * Open an NVS namespace.
@@ -46,12 +55,10 @@ esp_err_t hal_nvs_commit(
     nvs_handle_t handle);
 
 
+/* -------------------------------------------------------------------------- */
+/* Unsigned 32-bit value                                                      */
+/* -------------------------------------------------------------------------- */
 
-
-
-/*
- * Unsigned 32-bit value.
- */
 esp_err_t hal_nvs_get_u32(
     nvs_handle_t handle,
     const char *key,
@@ -63,9 +70,10 @@ esp_err_t hal_nvs_set_u32(
     uint32_t value);
 
 
-/*
- * Signed 32-bit value.
- */
+/* -------------------------------------------------------------------------- */
+/* Signed 32-bit value                                                        */
+/* -------------------------------------------------------------------------- */
+
 esp_err_t hal_nvs_get_i32(
     nvs_handle_t handle,
     const char *key,
@@ -77,9 +85,10 @@ esp_err_t hal_nvs_set_i32(
     int32_t value);
 
 
-/*
- * Floating-point value.
- */
+/* -------------------------------------------------------------------------- */
+/* Floating-point value                                                       */
+/* -------------------------------------------------------------------------- */
+
 esp_err_t hal_nvs_get_float(
     nvs_handle_t handle,
     const char *key,
@@ -91,9 +100,11 @@ esp_err_t hal_nvs_set_float(
     float value);
 
 
+/* -------------------------------------------------------------------------- */
+/* String value                                                               */
+/* -------------------------------------------------------------------------- */
+
 /*
- * String value.
- *
  * hal_nvs_get_string() requires the caller to provide
  * the destination buffer and its size.
  */
@@ -109,8 +120,22 @@ esp_err_t hal_nvs_set_string(
     const char *value);
 
 
+/* -------------------------------------------------------------------------- */
+/* Binary blob                                                                 */
+/* -------------------------------------------------------------------------- */
+
 /*
- * Binary blob.
+ * Read a binary blob from NVS.
+ *
+ * The caller supplies the destination buffer and its size.
+ *
+ * On input:
+ *
+ *     *size = size of destination buffer
+ *
+ * On success:
+ *
+ *     *size = number of bytes actually read
  */
 esp_err_t hal_nvs_get_blob(
     nvs_handle_t handle,
@@ -118,12 +143,20 @@ esp_err_t hal_nvs_get_blob(
     void *data,
     size_t *size);
 
+
+/*
+ * Write a binary blob to NVS.
+ */
 esp_err_t hal_nvs_set_blob(
     nvs_handle_t handle,
     const char *key,
     const void *data,
     size_t size);
 
+
+/* -------------------------------------------------------------------------- */
+/* Key management                                                             */
+/* -------------------------------------------------------------------------- */
 
 /*
  * Erase one key.
@@ -138,6 +171,7 @@ esp_err_t hal_nvs_erase_key(
  */
 esp_err_t hal_nvs_erase_all(
     nvs_handle_t handle);
+
 
 #ifdef __cplusplus
 }

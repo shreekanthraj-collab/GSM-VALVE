@@ -21,7 +21,9 @@
 
 #include "condition_monitor_manager.h"
 #include "safety_manager.h"
+
 #include "eol_manager.h"
+#include "eol_persistence.h"
 
 #include "board_config.h"
 
@@ -31,6 +33,43 @@
 /* -------------------------------------------------------------------------- */
 
 static const char *TAG = "GSM_VALVE";
+
+
+/* -------------------------------------------------------------------------- */
+/* EOL persistence identity                                                   */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Stage 2A hardware/configuration identity.
+ *
+ * This is currently a deterministic configuration fingerprint.
+ *
+ * It is NOT a cryptographic identity and does not yet claim to
+ * uniquely identify every replaceable physical component.
+ *
+ * The fingerprint will be extended later when component-specific
+ * hardware identity information is exposed by the drivers.
+ */
+static const uint32_t EOL_HARDWARE_FINGERPRINT =
+    0x47535632UL;
+
+
+/*
+ * Firmware/EOL compatibility identity.
+ *
+ * If the EOL compatibility requirements change, this value must
+ * change. A mismatch causes the previous factory EOL result to
+ * require re-verification.
+ */
+static const uint32_t EOL_FIRMWARE_FINGERPRINT =
+    0x00010001UL;
+
+
+/*
+ * Firmware identification stored with the factory EOL record.
+ */
+static const char *EOL_FIRMWARE_VERSION =
+    "GSM-VALVE";
 
 
 /* -------------------------------------------------------------------------- */
@@ -523,6 +562,57 @@ static esp_err_t app_run_eol_stage2a(
 
 
     /* ---------------------------------------------------------------------- */
+    /* Persist completed EOL result                                           */
+    /* ---------------------------------------------------------------------- */
+
+    if (status.state ==
+        EOL_STATE_COMPLETE) {
+
+        err =
+            eol_persistence_save_result(
+                &status);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "EOL result persistence failed: %s",
+                esp_err_to_name(err));
+
+            return err;
+        }
+
+
+        ESP_LOGI(
+            TAG,
+            "Factory EOL result saved to NVS");
+
+
+        if (status.overall_result ==
+            EOL_OVERALL_PASS) {
+
+            ESP_LOGI(
+                TAG,
+                "FACTORY EOL RESULT: PASS");
+
+        }
+        else {
+
+            ESP_LOGW(
+                TAG,
+                "FACTORY EOL RESULT: FAIL");
+        }
+    }
+    else {
+
+        ESP_LOGW(
+            TAG,
+            "EOL result was not COMPLETE; "
+            "not saving factory record");
+    }
+
+
+    /* ---------------------------------------------------------------------- */
     /* EOL summary                                                             */
     /* ---------------------------------------------------------------------- */
 
@@ -544,7 +634,110 @@ static esp_err_t app_run_eol_stage2a(
         TAG,
         "EOL Stage 2A complete");
 
+
     return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* EOL persistence startup status                                             */
+/* -------------------------------------------------------------------------- */
+
+static void app_log_eol_persistence_status(void)
+{
+    eol_persistence_validity_t validity =
+        eol_persistence_get_validity();
+
+
+    switch (validity) {
+
+        case EOL_PERSISTENCE_VALID:
+
+            ESP_LOGI(
+                TAG,
+                "==================================================");
+
+            ESP_LOGI(
+                TAG,
+                "FACTORY EOL STATUS: VALID");
+
+            ESP_LOGI(
+                TAG,
+                "Stored EOL record matches current identity");
+
+            ESP_LOGI(
+                TAG,
+                "==================================================");
+
+            break;
+
+
+        case EOL_PERSISTENCE_REVERIFICATION_REQUIRED:
+
+            ESP_LOGW(
+                TAG,
+                "==================================================");
+
+            ESP_LOGW(
+                TAG,
+                "FACTORY EOL STATUS: "
+                "RE-VERIFICATION REQUIRED");
+
+            ESP_LOGW(
+                TAG,
+                "Previous EOL record is preserved in NVS");
+
+            ESP_LOGW(
+                TAG,
+                "A new EOL verification is required");
+
+            ESP_LOGW(
+                TAG,
+                "==================================================");
+
+            break;
+
+
+        case EOL_PERSISTENCE_FAILED:
+
+            ESP_LOGW(
+                TAG,
+                "==================================================");
+
+            ESP_LOGW(
+                TAG,
+                "FACTORY EOL STATUS: "
+                "PREVIOUS RESULT FAILED");
+
+            ESP_LOGW(
+                TAG,
+                "==================================================");
+
+            break;
+
+
+        case EOL_PERSISTENCE_NOT_TESTED:
+
+        default:
+
+            ESP_LOGI(
+                TAG,
+                "==================================================");
+
+            ESP_LOGI(
+                TAG,
+                "FACTORY EOL STATUS: NOT TESTED");
+
+            ESP_LOGI(
+                TAG,
+                "No completed factory EOL record exists");
+
+            ESP_LOGI(
+                TAG,
+                "==================================================");
+
+            break;
+    }
 }
 
 
@@ -577,6 +770,94 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "NVS initialized");
+
+
+    /* ---------------------------------------------------------------------- */
+    /* EOL Persistence                                                         */
+    /* ---------------------------------------------------------------------- */
+
+    err =
+        eol_persistence_init();
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL persistence initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "EOL persistence initialized");
+
+
+    /*
+     * Configure the identity currently represented by the
+     * Stage 2A hardware/configuration baseline.
+     */
+    err =
+        eol_persistence_set_hardware_fingerprint(
+            EOL_HARDWARE_FINGERPRINT);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL hardware fingerprint setup failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    err =
+        eol_persistence_set_firmware_fingerprint(
+            EOL_FIRMWARE_FINGERPRINT);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL firmware fingerprint setup failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    err =
+        eol_persistence_set_firmware_version(
+            EOL_FIRMWARE_VERSION);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL firmware version setup failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    err =
+        eol_persistence_validate_current_identity();
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL identity validation failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    app_log_eol_persistence_status();
 
 
     /* ---------------------------------------------------------------------- */
@@ -864,6 +1145,7 @@ static esp_err_t app_init(void)
         return err;
     }
 
+
     err =
         encoder_position_update(
             angle);
@@ -899,6 +1181,7 @@ static esp_err_t app_init(void)
         return err;
     }
 
+
     ESP_LOGI(
         TAG,
         "Encoder position: "
@@ -933,6 +1216,7 @@ static esp_err_t app_init(void)
         return err;
     }
 
+
     ESP_LOGI(
         TAG,
         "Battery manager initialized: "
@@ -958,6 +1242,7 @@ static esp_err_t app_init(void)
 
         return err;
     }
+
 
     ESP_LOGI(
         TAG,
@@ -1042,6 +1327,7 @@ static esp_err_t app_init(void)
         return err;
     }
 
+
     ESP_LOGI(
         TAG,
         "EOL manager initialized");
@@ -1065,12 +1351,14 @@ void app_main(void)
     esp_err_t err =
         app_init();
 
+
     if (err != ESP_OK) {
 
         ESP_LOGE(
             TAG,
             "Application initialization failed: %s",
             esp_err_to_name(err));
+
 
         while (1) {
 
@@ -1090,7 +1378,7 @@ void app_main(void)
     /* ---------------------------------------------------------------------- */
 
     /*
-     * Stage 2A runs once for bench validation.
+     * Stage 2A runs once for the current bench-validation firmware.
      *
      * Safe tests:
      *
@@ -1100,7 +1388,7 @@ void app_main(void)
      *   INA226
      *   Battery
      *
-     * No motor movement.
+     * Motor control remains disconnected.
      */
     {
         uint32_t now_ms =
@@ -1108,9 +1396,11 @@ void app_main(void)
                 esp_timer_get_time() /
                 1000ULL);
 
+
         err =
             app_run_eol_stage2a(
                 now_ms);
+
 
         if (err != ESP_OK) {
 
@@ -1144,6 +1434,7 @@ void app_main(void)
                 esp_timer_get_time() /
                 1000ULL);
 
+
         const bool motor_running =
             false;
 
@@ -1157,6 +1448,7 @@ void app_main(void)
                 now_ms,
                 motor_running);
 
+
         if (err != ESP_OK) {
 
             ESP_LOGE(
@@ -1164,8 +1456,10 @@ void app_main(void)
                 "Condition Monitor update failed: %s",
                 esp_err_to_name(err));
 
+
             vTaskDelay(
                 pdMS_TO_TICKS(1000));
+
 
             continue;
         }
@@ -1178,9 +1472,11 @@ void app_main(void)
         condition_monitor_reading_t reading =
             {0};
 
+
         err =
             condition_monitor_manager_get_reading(
                 &reading);
+
 
         if (err != ESP_OK) {
 
@@ -1189,8 +1485,10 @@ void app_main(void)
                 "Condition Monitor reading failed: %s",
                 esp_err_to_name(err));
 
+
             vTaskDelay(
                 pdMS_TO_TICKS(1000));
+
 
             continue;
         }
@@ -1203,9 +1501,11 @@ void app_main(void)
         condition_monitor_state_t condition_state =
             {0};
 
+
         err =
             condition_monitor_manager_get_state(
                 &condition_state);
+
 
         if (err != ESP_OK) {
 
@@ -1214,8 +1514,10 @@ void app_main(void)
                 "Condition Monitor state failed: %s",
                 esp_err_to_name(err));
 
+
             vTaskDelay(
                 pdMS_TO_TICKS(1000));
+
 
             continue;
         }
@@ -1269,11 +1571,13 @@ void app_main(void)
         safety_manager_output_t safety_output =
             {0};
 
+
         err =
             safety_manager_evaluate(
                 &safety_inputs,
                 now_ms,
                 &safety_output);
+
 
         if (err != ESP_OK) {
 
@@ -1282,8 +1586,10 @@ void app_main(void)
                 "Safety Manager evaluation failed: %s",
                 esp_err_to_name(err));
 
+
             vTaskDelay(
                 pdMS_TO_TICKS(1000));
+
 
             continue;
         }
