@@ -11,6 +11,7 @@
 
 #include "drv_as5600.h"
 #include "drv_ina226.h"
+#include "drv_modem.h"
 
 #include "encoder_manager.h"
 #include "encoder_persistence_manager.h"
@@ -20,6 +21,8 @@
 
 #include "condition_monitor_manager.h"
 #include "safety_manager.h"
+
+#include "board_config.h"
 
 
 /* -------------------------------------------------------------------------- */
@@ -54,18 +57,36 @@ static const char *TAG = "GSM_VALVE";
  * configuration for the later motor/bypass manager.
  */
 static const battery_manager_config_t battery_config = {
-    .unit = ADC_UNIT_1,
-    .channel = ADC_CHANNEL_0,
-    .attenuation = ADC_ATTEN_DB_12,
-    .bitwidth = ADC_BITWIDTH_DEFAULT,
 
-    .divider_ratio = 11.0f,
+    .unit =
+        ADC_UNIT_1,
 
-    .critical_voltage_v = 11.2f,
-    .cut_voltage_v = 11.6f,
-    .low_voltage_v = 12.0f,
-    .reset_voltage_v = 12.0f,
-    .high_voltage_v = 12.4f
+    .channel =
+        ADC_CHANNEL_0,
+
+    .attenuation =
+        ADC_ATTEN_DB_12,
+
+    .bitwidth =
+        ADC_BITWIDTH_DEFAULT,
+
+    .divider_ratio =
+        11.0f,
+
+    .critical_voltage_v =
+        11.2f,
+
+    .cut_voltage_v =
+        11.6f,
+
+    .low_voltage_v =
+        12.0f,
+
+    .reset_voltage_v =
+        12.0f,
+
+    .high_voltage_v =
+        12.4f
 };
 
 
@@ -90,7 +111,6 @@ static const battery_manager_config_t battery_config = {
  *
  * Shunt voltage:
  *   6 A -> 60 mV
- *   7 A -> 70 mV
  *
  * INA226 calibration:
  *
@@ -103,13 +123,18 @@ static const battery_manager_config_t battery_config = {
  * continuous shunt + bus conversion configuration.
  */
 static const drv_ina226_config_t ina226_config = {
-    .i2c_address = DRV_INA226_I2C_ADDRESS_DEFAULT,
 
-    .shunt_resistance_ohms = 0.010f,
+    .i2c_address =
+        DRV_INA226_I2C_ADDRESS_DEFAULT,
 
-    .current_lsb_a = 0.001f,
+    .shunt_resistance_ohms =
+        0.010f,
 
-    .config_register = 0U
+    .current_lsb_a =
+        0.001f,
+
+    .config_register =
+        0U
 };
 
 
@@ -138,19 +163,27 @@ static const drv_ina226_config_t ina226_config = {
  *   120 seconds = 2 minutes
  */
 static const condition_monitor_config_t condition_monitor_config = {
-    .warn_voltage_low_v = 12.0f,
 
-    .cut_voltage_v = 11.6f,
+    .warn_voltage_low_v =
+        12.0f,
 
-    .critical_voltage_v = 11.2f,
+    .cut_voltage_v =
+        11.6f,
 
-    .reset_voltage_v = 12.0f,
+    .critical_voltage_v =
+        11.2f,
 
-    .overcurrent_trip_a = 6.0f,
+    .reset_voltage_v =
+        12.0f,
 
-    .overcurrent_max_attempts = 3U,
+    .overcurrent_trip_a =
+        6.0f,
 
-    .battery_bypass_timeout_ms = 120000U
+    .overcurrent_max_attempts =
+        3U,
+
+    .battery_bypass_timeout_ms =
+        120000U
 };
 
 
@@ -165,13 +198,18 @@ static const condition_monitor_config_t condition_monitor_config = {
  * It does not access ADC/VBAT directly.
  */
 static const safety_manager_config_t safety_config = {
-    .cut_voltage_v = 11.6f,
 
-    .critical_voltage_v = 11.2f,
+    .cut_voltage_v =
+        11.6f,
 
-    .overcurrent_trip_a = 6.0f,
+    .critical_voltage_v =
+        11.2f,
 
-    .battery_bypass_timeout_ms = 120000U,
+    .overcurrent_trip_a =
+        6.0f,
+
+    .battery_bypass_timeout_ms =
+        120000U,
 
     /*
      * Temporary baseline motor runtime limit.
@@ -179,7 +217,76 @@ static const safety_manager_config_t safety_config = {
      * This remains a configuration-layer parameter and can
      * later be made runtime configurable.
      */
-    .motor_max_runtime_ms = 120000U
+    .motor_max_runtime_ms =
+        120000U
+};
+
+
+/* -------------------------------------------------------------------------- */
+/* A7670C modem configuration                                                  */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * SIMCom A7670C LTE modem.
+ *
+ * Physical board mapping:
+ *
+ *   UART1 TX = GPIO17
+ *   UART1 RX = GPIO18
+ *   PWRKEY   = GPIO6
+ *   RESET    = GPIO7
+ *   STATUS   = GPIO38
+ *
+ * Initial UART baud:
+ *   115200
+ *
+ * IMPORTANT:
+ *
+ * 115200 is only the initial communication-test setting.
+ * It has not yet been confirmed against the physical modem.
+ *
+ * The modem is NOT automatically power-cycled here.
+ *
+ * We first want to determine whether the modem is already
+ * powered and responsive to AT commands.
+ */
+static const drv_modem_config_t modem_config = {
+
+    .uart_port =
+        BOARD_LTE_UART_PORT,
+
+    .tx_gpio =
+        BOARD_LTE_TX_GPIO,
+
+    .rx_gpio =
+        BOARD_LTE_RX_GPIO,
+
+    .pwrkey_gpio =
+        BOARD_LTE_PWRKEY_GPIO,
+
+    .reset_gpio =
+        BOARD_LTE_RESET_GPIO,
+
+    .status_gpio =
+        BOARD_LTE_STATUS_GPIO,
+
+    .baud_rate =
+        115200U,
+
+    .uart_rx_buffer_size =
+        4096U,
+
+    .uart_tx_buffer_size =
+        2048U,
+
+    .uart_timeout_ms =
+        1000U,
+
+    .command_timeout_ms =
+        3000U,
+
+    .response_buffer_size =
+        1024U
 };
 
 
@@ -199,7 +306,8 @@ static esp_err_t app_init(void)
     /*
      * Initialize persistent storage first.
      */
-    err = hal_nvs_init();
+    err =
+        hal_nvs_init();
 
     if (err != ESP_OK) {
 
@@ -230,11 +338,17 @@ static esp_err_t app_init(void)
      * The I2C HAL owns the physical bus.
      */
     const hal_i2c_config_t i2c_config = {
-        .frequency_hz = 100000U,
-        .timeout_ms = 1000U
+
+        .frequency_hz =
+            100000U,
+
+        .timeout_ms =
+            1000U
     };
 
-    err = hal_i2c_init(&i2c_config);
+    err =
+        hal_i2c_init(
+            &i2c_config);
 
     if (err != ESP_OK) {
 
@@ -261,7 +375,8 @@ static esp_err_t app_init(void)
      * The RTC manager depends on the already initialized
      * I2C HAL.
      */
-    err = rtc_manager_init();
+    err =
+        rtc_manager_init();
 
     if (err != ESP_OK) {
 
@@ -292,8 +407,9 @@ static esp_err_t app_init(void)
      *
      * The I2C HAL is already initialized.
      */
-    err = drv_ina226_init(
-        &ina226_config);
+    err =
+        drv_ina226_init(
+            &ina226_config);
 
     if (err != ESP_OK) {
 
@@ -308,10 +424,14 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "INA226 initialized: "
-        "addr=0x%02X shunt=%.3f Ohm current_lsb=%.3f A",
+        "addr=0x%02X "
+        "shunt=%.3f Ohm "
+        "current_lsb=%.3f A",
         ina226_config.i2c_address,
-        (double)ina226_config.shunt_resistance_ohms,
-        (double)ina226_config.current_lsb_a);
+        (double)
+            ina226_config.shunt_resistance_ohms,
+        (double)
+            ina226_config.current_lsb_a);
 
 
     /* ---------------------------------------------------------------------- */
@@ -340,9 +460,13 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "Condition Monitor initialized: "
-        "OC=%.2f A attempts=%u bypass=%lu ms",
-        (double)condition_monitor_config.overcurrent_trip_a,
-        (unsigned)condition_monitor_config.overcurrent_max_attempts,
+        "OC=%.2f A "
+        "attempts=%u "
+        "bypass=%lu ms",
+        (double)
+            condition_monitor_config.overcurrent_trip_a,
+        (unsigned)
+            condition_monitor_config.overcurrent_max_attempts,
         (unsigned long)
             condition_monitor_config.battery_bypass_timeout_ms);
 
@@ -373,13 +497,16 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "Safety Manager initialized: "
-        "OC=%.2f A max_runtime=%lu ms",
-        (double)safety_config.overcurrent_trip_a,
-        (unsigned long)safety_config.motor_max_runtime_ms);
+        "OC=%.2f A "
+        "max_runtime=%lu ms",
+        (double)
+            safety_config.overcurrent_trip_a,
+        (unsigned long)
+            safety_config.motor_max_runtime_ms);
 
 
     /* ---------------------------------------------------------------------- */
-    /* AS5600                                                                */
+    /* AS5600                                                                 */
     /* ---------------------------------------------------------------------- */
 
     /*
@@ -388,7 +515,9 @@ static esp_err_t app_init(void)
      * The AS5600 uses the shared I2C bus at address 0x36.
      */
     const drv_as5600_config_t as5600_config = {
-        .i2c_address = DRV_AS5600_I2C_ADDRESS
+
+        .i2c_address =
+            DRV_AS5600_I2C_ADDRESS
     };
 
     err =
@@ -417,7 +546,8 @@ static esp_err_t app_init(void)
     /*
      * Initialize the wrap-aware encoder manager.
      */
-    err = encoder_manager_init();
+    err =
+        encoder_manager_init();
 
     if (err != ESP_OK) {
 
@@ -443,7 +573,8 @@ static esp_err_t app_init(void)
      *
      * NVS has already been initialized above.
      */
-    err = encoder_persistence_init();
+    err =
+        encoder_persistence_init();
 
     if (err != ESP_OK) {
 
@@ -472,7 +603,8 @@ static esp_err_t app_init(void)
      *   - encoder manager
      *   - encoder persistence
      */
-    err = encoder_position_init();
+    err =
+        encoder_position_init();
 
     if (err != ESP_OK) {
 
@@ -494,7 +626,8 @@ static esp_err_t app_init(void)
      *
      * ESP_ERR_NOT_FOUND is a normal first-boot condition.
      */
-    err = encoder_position_restore();
+    err =
+        encoder_position_restore();
 
     if (err == ESP_ERR_NOT_FOUND) {
 
@@ -528,7 +661,8 @@ static esp_err_t app_init(void)
      * does not create movement relative to the persisted
      * last_angle.
      */
-    uint16_t angle = 0U;
+    uint16_t angle =
+        0U;
 
     err =
         drv_as5600_read_angle(
@@ -562,7 +696,8 @@ static esp_err_t app_init(void)
     /*
      * Report the resulting position for diagnostics.
      */
-    encoder_position_state_t position = {0};
+    encoder_position_state_t position =
+        {0};
 
     err =
         encoder_position_get_state(
@@ -581,11 +716,19 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "Encoder position: "
-        "angle=%u total_angle=%lld turns=%.4f restored=%s",
-        (unsigned)position.angle,
-        (long long)position.total_angle,
-        (double)position.total_turns,
-        position.restored ? "yes" : "no");
+        "angle=%u "
+        "total_angle=%lld "
+        "turns=%.4f "
+        "restored=%s",
+        (unsigned)
+            position.angle,
+        (long long)
+            position.total_angle,
+        (double)
+            position.total_turns,
+        position.restored
+            ? "yes"
+            : "no");
 
 
     /* ---------------------------------------------------------------------- */
@@ -623,10 +766,11 @@ static esp_err_t app_init(void)
     /*
      * Take an initial battery measurement.
      *
-     * This validates the ADC path during application startup
+     * This validates the ADC path during startup
      * without yet applying motor-control battery policy.
      */
-    battery_manager_reading_t battery = {0};
+    battery_manager_reading_t battery =
+        {0};
 
     err =
         battery_manager_read(
@@ -644,11 +788,157 @@ static esp_err_t app_init(void)
 
     ESP_LOGI(
         TAG,
-        "Battery: ADC=%.3f V "
-        "VBAT=%.3f V state=%d",
-        (double)battery.adc_voltage_v,
-        (double)battery.battery_voltage_v,
-        (int)battery.state);
+        "Battery: "
+        "ADC=%.3f V "
+        "VBAT=%.3f V "
+        "state=%d",
+        (double)
+            battery.adc_voltage_v,
+        (double)
+            battery.battery_voltage_v,
+        (int)
+            battery.state);
+
+
+    /* ---------------------------------------------------------------------- */
+    /* A7670C Modem                                                          */
+    /* ---------------------------------------------------------------------- */
+
+    /*
+     * Initialize the generic modem driver.
+     *
+     * Physical mapping:
+     *
+     *   UART1 TX = GPIO17
+     *   UART1 RX = GPIO18
+     *   PWRKEY   = GPIO6
+     *   RESET    = GPIO7
+     *   STATUS   = GPIO38
+     *
+     * The modem is not automatically power-cycled here.
+     *
+     * The first test determines whether the modem is already
+     * powered and responding to AT commands.
+     */
+    err =
+        drv_modem_init(
+            &modem_config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGW(
+            TAG,
+            "A7670C modem initialization failed: %s",
+            esp_err_to_name(err));
+
+        /*
+         * LTE is not yet a mandatory dependency of the
+         * local actuator/safety baseline.
+         *
+         * Continue local operation if modem initialization
+         * fails.
+         */
+        ESP_LOGW(
+            TAG,
+            "Continuing without LTE modem");
+    }
+    else {
+
+        ESP_LOGI(
+            TAG,
+            "A7670C modem driver initialized: "
+            "UART1 TX=%d "
+            "RX=%d "
+            "PWRKEY=%d "
+            "RESET=%d "
+            "STATUS=%d "
+            "baud=%lu",
+            BOARD_LTE_TX_GPIO,
+            BOARD_LTE_RX_GPIO,
+            BOARD_LTE_PWRKEY_GPIO,
+            BOARD_LTE_RESET_GPIO,
+            BOARD_LTE_STATUS_GPIO,
+            (unsigned long)
+                modem_config.baud_rate);
+
+
+        /* ------------------------------------------------------------------ */
+        /* Initial AT communication test                                      */
+        /* ------------------------------------------------------------------ */
+
+        /*
+         * Do NOT automatically press PWRKEY yet.
+         *
+         * The modem may already be powered.
+         *
+         * First test whether the currently powered modem responds
+         * to AT at 115200 baud.
+         */
+        err =
+            drv_modem_ping();
+
+        if (err != ESP_OK) {
+
+            ESP_LOGW(
+                TAG,
+                "A7670C did not respond to AT "
+                "at 115200 baud: %s",
+                esp_err_to_name(err));
+
+            ESP_LOGW(
+                TAG,
+                "Modem may be powered off, "
+                "still booting, or using another baud rate");
+        }
+        else {
+
+            ESP_LOGI(
+                TAG,
+                "A7670C AT communication OK");
+
+
+            /* -------------------------------------------------------------- */
+            /* Modem identification                                          */
+            /* -------------------------------------------------------------- */
+
+            drv_modem_info_t modem_info =
+                {0};
+
+            err =
+                drv_modem_get_info(
+                    &modem_info);
+
+            if (err != ESP_OK) {
+
+                ESP_LOGW(
+                    TAG,
+                    "A7670C identification failed: %s",
+                    esp_err_to_name(err));
+            }
+            else {
+
+                ESP_LOGI(
+                    TAG,
+                    "A7670C manufacturer: %s",
+                    modem_info.manufacturer);
+
+                ESP_LOGI(
+                    TAG,
+                    "A7670C model: %s",
+                    modem_info.model);
+
+                ESP_LOGI(
+                    TAG,
+                    "A7670C revision: %s",
+                    modem_info.revision);
+
+                ESP_LOGI(
+                    TAG,
+                    "A7670C IMEI: %s",
+                    modem_info.imei);
+            }
+        }
+    }
 
 
     return ESP_OK;
@@ -725,10 +1015,12 @@ void app_main(void)
                 esp_timer_get_time() /
                 1000ULL);
 
+
         /*
          * Motor is not connected to this runtime stage.
          */
-        const bool motor_running = false;
+        const bool motor_running =
+            false;
 
 
         /* ------------------------------------------------------------------ */
@@ -758,7 +1050,8 @@ void app_main(void)
         /* Condition Monitor reading                                           */
         /* ------------------------------------------------------------------ */
 
-        condition_monitor_reading_t reading = {0};
+        condition_monitor_reading_t reading =
+            {0};
 
         err =
             condition_monitor_manager_get_reading(
@@ -782,7 +1075,8 @@ void app_main(void)
         /* Condition Monitor state                                             */
         /* ------------------------------------------------------------------ */
 
-        condition_monitor_state_t condition_state = {0};
+        condition_monitor_state_t condition_state =
+            {0};
 
         err =
             condition_monitor_manager_get_state(
@@ -852,7 +1146,8 @@ void app_main(void)
         /* Safety Manager evaluation                                            */
         /* ------------------------------------------------------------------ */
 
-        safety_manager_output_t safety_output = {0};
+        safety_manager_output_t safety_output =
+            {0};
 
         err =
             safety_manager_evaluate(
@@ -898,12 +1193,18 @@ void app_main(void)
             "Close=%d "
             "Bypass=%d "
             "Fault=%d",
-            (double)reading.bus_voltage_v,
-            (double)reading.current_a,
-            (double)reading.power_w,
-            (int)condition_state.voltage_state,
-            (int)condition_state.current_state,
-            (int)safety_output.state,
+            (double)
+                reading.bus_voltage_v,
+            (double)
+                reading.current_a,
+            (double)
+                reading.power_w,
+            (int)
+                condition_state.voltage_state,
+            (int)
+                condition_state.current_state,
+            (int)
+                safety_output.state,
             safety_output.allow_motor_start,
             safety_output.allow_motor_run,
             safety_output.request_motor_stop,
