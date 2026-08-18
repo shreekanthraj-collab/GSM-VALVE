@@ -28,6 +28,7 @@
         "../framework/managers/condition_monitor/condition_monitor_manager.c"
         "../framework/managers/safety/safety_manager.c"
         "../framework/managers/actuator/actuator_manager.c"
+        "../framework/managers/eol/eol_manager.c"
 
     INCLUDE_DIRS
         "."
@@ -49,6 +50,7 @@
         "../framework/managers/condition_monitor"
         "../framework/managers/safety"
         "../framework/managers/actuator"
+        "../framework/managers/eol"
 
         "../boards/gsm_valve"
 )

@@ -49,9 +49,8 @@ esp_err_t drv_as5600_init(
  *
  * Returns the unscaled 0..4095 sensor value.
  */
-esp_err_t drv_as5600_read_raw_angle(
-    uint16_t *raw_angle);
-
+esp_err_t drv_as5600_read_angle(
+    uint16_t *angle);
 /*
  * Read the processed 12-bit AS5600 angle register.
  *

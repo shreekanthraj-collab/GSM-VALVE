@@ -6,12 +6,37 @@
 
 #include "esp_log.h"
 
+#include "hal_i2c.h"
+#include "hal_rtc.h"
+
+#include "drv_as5600.h"
+#include "drv_ina226.h"
+
+#include "rtc_manager.h"
+#include "battery_manager.h"
+
 
 /* -------------------------------------------------------------------------- */
 /* Module                                                                     */
 /* -------------------------------------------------------------------------- */
 
 static const char *TAG = "EOL";
+
+
+/* -------------------------------------------------------------------------- */
+/* GSM-VALVE hardware                                                         */
+/* -------------------------------------------------------------------------- */
+
+#define EOL_I2C_AS5600_ADDRESS       0x36U
+#define EOL_I2C_INA226_ADDRESS       0x40U
+#define EOL_I2C_RTC_ADDRESS          0x51U
+
+#define EOL_INA226_EXPECTED_MFG_ID   0x5449U
+
+#define EOL_ENCODER_MAX_ANGLE        4095U
+
+#define EOL_BATTERY_MIN_VALID_V      0.0f
+#define EOL_BATTERY_MAX_VALID_V      20.0f
 
 
 /* -------------------------------------------------------------------------- */
@@ -201,11 +226,6 @@ static void calculate_overall_result(void)
         return;
     }
 
-    /*
-     * SKIP is allowed for tests which are not populated or
-     * cannot safely be performed at the current production
-     * stage.
-     */
     if (s_status.state ==
         EOL_STATE_COMPLETE) {
 
@@ -256,6 +276,398 @@ static void reset_status(void)
 
 
 /* -------------------------------------------------------------------------- */
+/* Stage 2 hardware tests                                                     */
+/* -------------------------------------------------------------------------- */
+
+static esp_err_t run_i2c_scan_test(void)
+{
+    bool as5600_ok =
+        hal_i2c_probe(
+            EOL_I2C_AS5600_ADDRESS) == ESP_OK;
+
+    bool ina226_ok =
+        hal_i2c_probe(
+            EOL_I2C_INA226_ADDRESS) == ESP_OK;
+
+    bool rtc_ok =
+        hal_i2c_probe(
+            EOL_I2C_RTC_ADDRESS) == ESP_OK;
+
+    ESP_LOGI(
+        TAG,
+        "I2C scan: AS5600=0x%02X %s, "
+        "INA226=0x%02X %s, "
+        "RTC=0x%02X %s",
+        EOL_I2C_AS5600_ADDRESS,
+        as5600_ok ? "FOUND" : "NOT_FOUND",
+        EOL_I2C_INA226_ADDRESS,
+        ina226_ok ? "FOUND" : "NOT_FOUND",
+        EOL_I2C_RTC_ADDRESS,
+        rtc_ok ? "FOUND" : "NOT_FOUND");
+
+    if (!as5600_ok ||
+        !ina226_ok ||
+        !rtc_ok) {
+
+        set_result(
+            EOL_TEST_I2C_SCAN,
+            EOL_RESULT_FAIL,
+            "one or more required I2C devices missing",
+            0.0f);
+
+        return ESP_FAIL;
+    }
+
+    set_result(
+        EOL_TEST_I2C_SCAN,
+        EOL_RESULT_PASS,
+        "all required I2C devices found",
+        3.0f);
+
+    return ESP_OK;
+}
+
+
+static esp_err_t run_rtc_test(void)
+{
+    if (!rtc_manager_is_initialized()) {
+
+        set_result(
+            EOL_TEST_RTC,
+            EOL_RESULT_FAIL,
+            "RTC manager not initialized",
+            0.0f);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    rtc_manager_state_t state = {0};
+
+    esp_err_t err =
+        rtc_manager_get_state(
+            &state);
+
+    if (err != ESP_OK) {
+
+        set_result(
+            EOL_TEST_RTC,
+            EOL_RESULT_FAIL,
+            "RTC state read failed",
+            0.0f);
+
+        return err;
+    }
+
+    if (!state.valid) {
+
+        set_result(
+            EOL_TEST_RTC,
+            EOL_RESULT_FAIL,
+            "RTC time invalid",
+            0.0f);
+
+        return ESP_FAIL;
+    }
+
+    /*
+     * A successful timestamp read verifies that the PCF8563
+     * is readable through the complete RTC manager path.
+     */
+    uint32_t timestamp = 0U;
+
+    err =
+        rtc_manager_get_timestamp(
+            &timestamp);
+
+    if (err != ESP_OK) {
+
+        set_result(
+            EOL_TEST_RTC,
+            EOL_RESULT_FAIL,
+            "RTC timestamp read failed",
+            0.0f);
+
+        return err;
+    }
+
+    if (timestamp == 0U) {
+
+        set_result(
+            EOL_TEST_RTC,
+            EOL_RESULT_FAIL,
+            "RTC timestamp is zero",
+            0.0f);
+
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "RTC test PASS: timestamp=%" PRIu32,
+        timestamp);
+
+    set_result(
+        EOL_TEST_RTC,
+        EOL_RESULT_PASS,
+        "RTC read and timestamp valid",
+        (float)timestamp);
+
+    return ESP_OK;
+}
+
+
+static esp_err_t run_encoder_test(void)
+{
+    if (!drv_as5600_is_initialized()) {
+
+        set_result(
+            EOL_TEST_ENCODER,
+            EOL_RESULT_FAIL,
+            "AS5600 driver not initialized",
+            0.0f);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err =
+        drv_as5600_probe();
+
+    if (err != ESP_OK) {
+
+        set_result(
+            EOL_TEST_ENCODER,
+            EOL_RESULT_FAIL,
+            "AS5600 probe failed",
+            0.0f);
+
+        return err;
+    }
+
+    drv_as5600_reading_t reading = {0};
+
+    err =
+        drv_as5600_read(
+            &reading);
+
+    if (err != ESP_OK) {
+
+        set_result(
+            EOL_TEST_ENCODER,
+            EOL_RESULT_FAIL,
+            "AS5600 angle read failed",
+            0.0f);
+
+        return err;
+    }
+
+    if (reading.raw_angle >
+            EOL_ENCODER_MAX_ANGLE ||
+        reading.angle >
+            EOL_ENCODER_MAX_ANGLE) {
+
+        set_result(
+            EOL_TEST_ENCODER,
+            EOL_RESULT_FAIL,
+            "AS5600 angle outside valid range",
+            (float)reading.angle);
+
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "AS5600 test PASS: raw=%u angle=%u",
+        (unsigned)reading.raw_angle,
+        (unsigned)reading.angle);
+
+    set_result(
+        EOL_TEST_ENCODER,
+        EOL_RESULT_PASS,
+        "AS5600 probe and angle valid",
+        (float)reading.angle);
+
+    return ESP_OK;
+}
+
+
+static esp_err_t run_ina226_test(void)
+{
+    if (!drv_ina226_is_initialized()) {
+
+        set_result(
+            EOL_TEST_INA226,
+            EOL_RESULT_FAIL,
+            "INA226 driver not initialized",
+            0.0f);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err =
+        drv_ina226_probe();
+
+    if (err != ESP_OK) {
+
+        set_result(
+            EOL_TEST_INA226,
+            EOL_RESULT_FAIL,
+            "INA226 probe failed",
+            0.0f);
+
+        return err;
+    }
+
+    uint16_t manufacturer_id = 0U;
+
+    err =
+        drv_ina226_read_manufacturer_id(
+            &manufacturer_id);
+
+    if (err != ESP_OK) {
+
+        set_result(
+            EOL_TEST_INA226,
+            EOL_RESULT_FAIL,
+            "INA226 manufacturer ID read failed",
+            0.0f);
+
+        return err;
+    }
+
+    if (manufacturer_id !=
+        EOL_INA226_EXPECTED_MFG_ID) {
+
+        ESP_LOGE(
+            TAG,
+            "INA226 manufacturer ID mismatch: "
+            "expected=0x%04X actual=0x%04X",
+            EOL_INA226_EXPECTED_MFG_ID,
+            manufacturer_id);
+
+        set_result(
+            EOL_TEST_INA226,
+            EOL_RESULT_FAIL,
+            "INA226 manufacturer ID mismatch",
+            (float)manufacturer_id);
+
+        return ESP_FAIL;
+    }
+
+    drv_ina226_reading_t reading = {0};
+
+    err =
+        drv_ina226_read(
+            &reading);
+
+    if (err != ESP_OK) {
+
+        set_result(
+            EOL_TEST_INA226,
+            EOL_RESULT_FAIL,
+            "INA226 measurement read failed",
+            0.0f);
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "INA226 test PASS: "
+        "MFG=0x%04X "
+        "V=%.3f V "
+        "I=%.3f A "
+        "P=%.3f W",
+        manufacturer_id,
+        (double)reading.bus_voltage_v,
+        (double)reading.current_a,
+        (double)reading.power_w);
+
+    set_result(
+        EOL_TEST_INA226,
+        EOL_RESULT_PASS,
+        "INA226 identity and measurement valid",
+        reading.bus_voltage_v);
+
+    return ESP_OK;
+}
+
+
+static esp_err_t run_battery_test(void)
+{
+    if (!battery_manager_is_initialized()) {
+
+        set_result(
+            EOL_TEST_BATTERY,
+            EOL_RESULT_FAIL,
+            "battery manager not initialized",
+            0.0f);
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    battery_manager_reading_t reading = {0};
+
+    esp_err_t err =
+        battery_manager_read(
+            &reading);
+
+    if (err != ESP_OK) {
+
+        set_result(
+            EOL_TEST_BATTERY,
+            EOL_RESULT_FAIL,
+            "battery reading failed",
+            0.0f);
+
+        return err;
+    }
+
+    if (!reading.valid) {
+
+        set_result(
+            EOL_TEST_BATTERY,
+            EOL_RESULT_FAIL,
+            "battery reading invalid",
+            reading.battery_voltage_v);
+
+        return ESP_FAIL;
+    }
+
+    if (reading.battery_voltage_v <
+            EOL_BATTERY_MIN_VALID_V ||
+        reading.battery_voltage_v >
+            EOL_BATTERY_MAX_VALID_V) {
+
+        set_result(
+            EOL_TEST_BATTERY,
+            EOL_RESULT_FAIL,
+            "battery voltage outside diagnostic range",
+            reading.battery_voltage_v);
+
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Battery test PASS: "
+        "ADC=%.3f V "
+        "VBAT=%.3f V "
+        "state=%d",
+        (double)reading.adc_voltage_v,
+        (double)reading.battery_voltage_v,
+        (int)reading.state);
+
+    set_result(
+        EOL_TEST_BATTERY,
+        EOL_RESULT_PASS,
+        "battery ADC and voltage valid",
+        reading.battery_voltage_v);
+
+    return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
 /* Initialization                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -298,18 +710,6 @@ esp_err_t eol_manager_init(
     ESP_LOGI(
         TAG,
         "EOL manager initialized");
-
-    ESP_LOGI(
-        TAG,
-        "Config: overall_timeout=%" PRIu32
-        " ms test_timeout=%" PRIu32
-        " ms motor_runtime=%" PRIu32
-        " ms min_turns=%.4f max_current=%.3f A",
-        s_config.overall_timeout_ms,
-        s_config.test_timeout_ms,
-        s_config.motor_test_runtime_ms,
-        (double)s_config.motor_min_turns,
-        (double)s_config.motor_max_current_a);
 
     return ESP_OK;
 }
@@ -390,10 +790,6 @@ esp_err_t eol_manager_abort(void)
         return ESP_OK;
     }
 
-    /*
-     * Hardware-specific actuator shutdown will be connected
-     * here during the actuator EOL integration stage.
-     */
     esp_err_t err =
         eol_manager_force_safe_state();
 
@@ -416,6 +812,123 @@ esp_err_t eol_manager_abort(void)
     return ESP_OK;
 }
 
+
+/* -------------------------------------------------------------------------- */
+/* Individual tests                                                           */
+/* -------------------------------------------------------------------------- */
+
+esp_err_t eol_manager_run_test(
+    eol_test_id_t test_id)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!valid_test_id(test_id)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_status.state !=
+        EOL_STATE_RUNNING) {
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    set_result(
+        test_id,
+        EOL_RESULT_RUNNING,
+        "test running",
+        0.0f);
+
+    switch (test_id) {
+
+        case EOL_TEST_I2C_SCAN:
+            return run_i2c_scan_test();
+
+        case EOL_TEST_RTC:
+            return run_rtc_test();
+
+        case EOL_TEST_ENCODER:
+            return run_encoder_test();
+
+        case EOL_TEST_INA226:
+            return run_ina226_test();
+
+        case EOL_TEST_BATTERY:
+            return run_battery_test();
+
+        /*
+         * These tests intentionally remain disconnected.
+         *
+         * They will be implemented only after their hardware
+         * ownership and safety conditions are established.
+         */
+        case EOL_TEST_LIMIT_SWITCH:
+
+            set_result(
+                test_id,
+                EOL_RESULT_SKIP,
+                "limit switch not configured",
+                0.0f);
+
+            return ESP_OK;
+
+        case EOL_TEST_BUZZER:
+
+            set_result(
+                test_id,
+                EOL_RESULT_SKIP,
+                "buzzer not configured",
+                0.0f);
+
+            return ESP_OK;
+
+        case EOL_TEST_MODEM:
+
+            set_result(
+                test_id,
+                EOL_RESULT_SKIP,
+                "modem EOL adapter pending",
+                0.0f);
+
+            return ESP_OK;
+
+        case EOL_TEST_MOTOR_FORWARD:
+
+            set_result(
+                test_id,
+                EOL_RESULT_SKIP,
+                "motor EOL test pending safety integration",
+                0.0f);
+
+            return ESP_OK;
+
+        case EOL_TEST_MOTOR_REVERSE:
+
+            set_result(
+                test_id,
+                EOL_RESULT_SKIP,
+                "motor EOL test pending safety integration",
+                0.0f);
+
+            return ESP_OK;
+
+        default:
+
+            set_result(
+                test_id,
+                EOL_RESULT_FAIL,
+                "unknown EOL test",
+                0.0f);
+
+            return ESP_ERR_INVALID_ARG;
+    }
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* EOL processing                                                              */
+/* -------------------------------------------------------------------------- */
 
 esp_err_t eol_manager_process(
     uint32_t now_ms)
@@ -458,49 +971,13 @@ esp_err_t eol_manager_process(
         return ESP_ERR_TIMEOUT;
     }
 
-    /*
-     * Hardware test adapters are intentionally connected in
-     * the next EOL implementation stage.
-     */
     return ESP_OK;
 }
 
 
 /* -------------------------------------------------------------------------- */
-/* Individual tests                                                           */
+/* Test result                                                                */
 /* -------------------------------------------------------------------------- */
-
-esp_err_t eol_manager_run_test(
-    eol_test_id_t test_id)
-{
-    if (!s_initialized) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    if (!valid_test_id(test_id)) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    if (s_status.state !=
-        EOL_STATE_RUNNING) {
-
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    set_result(
-        test_id,
-        EOL_RESULT_RUNNING,
-        "test adapter not connected",
-        0.0f);
-
-    ESP_LOGI(
-        TAG,
-        "EOL test requested: %s",
-        test_name(test_id));
-
-    return ESP_OK;
-}
-
 
 esp_err_t eol_manager_get_test_result(
     eol_test_id_t test_id,
@@ -607,10 +1084,8 @@ esp_err_t eol_manager_force_safe_state(void)
     }
 
     /*
-     * No direct GPIO manipulation is performed here yet.
-     *
-     * The actuator manager will become the owner of actual
-     * motor shutdown when the EOL motor tests are integrated.
+     * Motor control remains outside the EOL manager until
+     * the actuator EOL safety integration stage.
      */
     ESP_LOGI(
         TAG,

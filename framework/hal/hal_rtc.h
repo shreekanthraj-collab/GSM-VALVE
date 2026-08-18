@@ -50,7 +50,11 @@ typedef struct
  * PCF8563 hardware alarm.
  *
  * The PCF8563 provides alarm matching for:
- * minute, hour, day and weekday.
+ *
+ *   - minute
+ *   - hour
+ *   - day
+ *   - weekday
  *
  * The PCF8563 does not provide a seconds alarm comparator.
  */

@@ -21,6 +21,7 @@
 
 #include "condition_monitor_manager.h"
 #include "safety_manager.h"
+#include "eol_manager.h"
 
 #include "board_config.h"
 
@@ -36,26 +37,6 @@ static const char *TAG = "GSM_VALVE";
 /* Battery configuration                                                      */
 /* -------------------------------------------------------------------------- */
 
-/*
- * GSM-VALVE hardware:
- *
- * VBAT ADC input:
- *   GPIO1 -> ADC1 channel 0
- *
- * Battery divider:
- *   100 kOhm / 10 kOhm
- *   ratio = (100k + 10k) / 10k = 11.0
- *
- * Battery policy:
- *   critical < 11.2 V
- *   cut      < 11.6 V
- *   low      < 12.0 V
- *   reset    = 12.0 V
- *   high     > 12.4 V
- *
- * The reset threshold is retained as part of the battery policy
- * configuration for the later motor/bypass manager.
- */
 static const battery_manager_config_t battery_config = {
 
     .unit =
@@ -106,17 +87,10 @@ static const battery_manager_config_t battery_config = {
  * Current LSB:
  *   1 mA / LSB
  *
- * Expected motor current range:
- *   approximately 6 A to 7 A
- *
- * Shunt voltage:
- *   6 A -> 60 mV
- *
- * INA226 calibration:
+ * Calibration:
  *
  *   CAL = 0.00512 / (Current_LSB * R_SHUNT)
- *
- *   CAL = 0.00512 / (0.001 * 0.010)
+ *       = 0.00512 / (0.001 * 0.010)
  *       = 512
  *
  * config_register = 0 selects the driver's default
@@ -146,21 +120,20 @@ static const drv_ina226_config_t ina226_config = {
  * Electrical protection policy.
  *
  * Voltage:
+ *
  *   critical = 11.2 V
  *   cut      = 11.6 V
  *   warning  = 12.0 V
  *   reset    = 12.0 V
  *
  * Current:
- *   default OC trip = 6.0 A
- *   maximum attempts = 3
  *
- * The OC threshold is intentionally kept outside the board
- * configuration so it can later be made runtime configurable
- * through the higher configuration/NVS/AWS layer.
+ *   OC trip       = 6.0 A
+ *   max attempts  = 3
  *
- * Bypass acknowledgement timeout:
- *   120 seconds = 2 minutes
+ * Bypass:
+ *
+ *   120 seconds.
  */
 static const condition_monitor_config_t condition_monitor_config = {
 
@@ -192,10 +165,10 @@ static const condition_monitor_config_t condition_monitor_config = {
 /* -------------------------------------------------------------------------- */
 
 /*
- * Safety Manager consumes Condition Monitor results.
+ * Safety consumes Condition Monitor results.
  *
- * It does not access INA226 directly.
- * It does not access ADC/VBAT directly.
+ * It does not directly access INA226.
+ * It does not directly access ADC/VBAT.
  */
 static const safety_manager_config_t safety_config = {
 
@@ -213,9 +186,6 @@ static const safety_manager_config_t safety_config = {
 
     /*
      * Temporary baseline motor runtime limit.
-     *
-     * This remains a configuration-layer parameter and can
-     * later be made runtime configurable.
      */
     .motor_max_runtime_ms =
         120000U
@@ -223,21 +193,52 @@ static const safety_manager_config_t safety_config = {
 
 
 /* -------------------------------------------------------------------------- */
-/* A7670C modem configuration                                                  */
+/* EOL Manager configuration                                                  */
 /* -------------------------------------------------------------------------- */
 
 /*
- * SIMCom A7670C LTE modem.
+ * EOL Stage 2A.
  *
- * Physical board mapping:
+ * Safe diagnostic tests only:
  *
- *   UART1 TX = GPIO17
- *   UART1 RX = GPIO18
- *   PWRKEY   = GPIO6
- *   RESET    = GPIO7
- *   STATUS   = GPIO38
+ *   1. I2C scan
+ *   2. RTC
+ *   3. AS5600 encoder
+ *   4. INA226
+ *   5. Battery
+ *
+ * Motor tests remain disabled.
+ *
+ * No relay or motor output is activated by EOL.
+ */
+static const eol_manager_config_t eol_config = {
+
+    .overall_timeout_ms =
+        300000U,
+
+    .test_timeout_ms =
+        10000U,
+
+    .motor_test_runtime_ms =
+        2000U,
+
+    .motor_min_turns =
+        0.05f,
+
+    .motor_max_current_a =
+        6.0f
+};
+
+
+/* -------------------------------------------------------------------------- */
+/* A7670C modem configuration                                                 */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * A7670C LTE modem.
  *
  * Initial UART baud:
+ *
  *   115200
  *
  * IMPORTANT:
@@ -245,10 +246,7 @@ static const safety_manager_config_t safety_config = {
  * 115200 is only the initial communication-test setting.
  * It has not yet been confirmed against the physical modem.
  *
- * The modem is NOT automatically power-cycled here.
- *
- * We first want to determine whether the modem is already
- * powered and responsive to AT commands.
+ * The modem is not automatically power-cycled here.
  */
 static const drv_modem_config_t modem_config = {
 
@@ -291,7 +289,267 @@ static const drv_modem_config_t modem_config = {
 
 
 /* -------------------------------------------------------------------------- */
-/* Initialization                                                             */
+/* EOL Stage 2A runner                                                        */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Run the five safe EOL diagnostics.
+ *
+ * No motor movement is performed.
+ */
+static esp_err_t app_run_eol_stage2a(
+    uint32_t now_ms)
+{
+    esp_err_t err;
+
+
+    ESP_LOGI(
+        TAG,
+        "==================================================");
+
+    ESP_LOGI(
+        TAG,
+        "EOL Stage 2A starting");
+
+    ESP_LOGI(
+        TAG,
+        "Safe diagnostics only");
+
+    ESP_LOGI(
+        TAG,
+        "I2C -> RTC -> AS5600 -> INA226 -> BATTERY");
+
+    ESP_LOGI(
+        TAG,
+        "==================================================");
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Start EOL                                                              */
+    /* ---------------------------------------------------------------------- */
+
+    err =
+        eol_manager_start();
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL start failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* I2C                                                                     */
+    /* ---------------------------------------------------------------------- */
+
+    ESP_LOGI(
+        TAG,
+        "EOL TEST: I2C scan");
+
+    err =
+        eol_manager_run_test(
+            EOL_TEST_I2C_SCAN);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL I2C test failed: %s",
+            esp_err_to_name(err));
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* RTC                                                                     */
+    /* ---------------------------------------------------------------------- */
+
+    ESP_LOGI(
+        TAG,
+        "EOL TEST: RTC");
+
+    err =
+        eol_manager_run_test(
+            EOL_TEST_RTC);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL RTC test failed: %s",
+            esp_err_to_name(err));
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Encoder                                                                 */
+    /* ---------------------------------------------------------------------- */
+
+    ESP_LOGI(
+        TAG,
+        "EOL TEST: AS5600 encoder");
+
+    err =
+        eol_manager_run_test(
+            EOL_TEST_ENCODER);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL encoder test failed: %s",
+            esp_err_to_name(err));
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* INA226                                                                  */
+    /* ---------------------------------------------------------------------- */
+
+    ESP_LOGI(
+        TAG,
+        "EOL TEST: INA226");
+
+    err =
+        eol_manager_run_test(
+            EOL_TEST_INA226);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL INA226 test failed: %s",
+            esp_err_to_name(err));
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Battery                                                                 */
+    /* ---------------------------------------------------------------------- */
+
+    ESP_LOGI(
+        TAG,
+        "EOL TEST: Battery");
+
+    err =
+        eol_manager_run_test(
+            EOL_TEST_BATTERY);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL battery test failed: %s",
+            esp_err_to_name(err));
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Process EOL                                                             */
+    /* ---------------------------------------------------------------------- */
+
+    err =
+        eol_manager_process(
+            now_ms);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL processing failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Force safe state                                                        */
+    /* ---------------------------------------------------------------------- */
+
+    err =
+        eol_manager_force_safe_state();
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL safe-state operation failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Read EOL status                                                         */
+    /* ---------------------------------------------------------------------- */
+
+    eol_status_t status = {0};
+
+    err =
+        eol_manager_get_status(
+            &status);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL status read failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    ESP_LOGI(
+        TAG,
+        "EOL results: "
+        "PASS=%lu "
+        "FAIL=%lu "
+        "SKIP=%lu "
+        "NOT_RUN=%lu",
+        (unsigned long)
+            status.tests_passed,
+        (unsigned long)
+            status.tests_failed,
+        (unsigned long)
+            status.tests_skipped,
+        (unsigned long)
+            status.tests_not_run);
+
+
+    /* ---------------------------------------------------------------------- */
+    /* EOL summary                                                             */
+    /* ---------------------------------------------------------------------- */
+
+    err =
+        eol_manager_log_summary();
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL summary failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    ESP_LOGI(
+        TAG,
+        "EOL Stage 2A complete");
+
+    return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Application initialization                                                 */
 /* -------------------------------------------------------------------------- */
 
 static esp_err_t app_init(void)
@@ -300,12 +558,9 @@ static esp_err_t app_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* NVS                                                                    */
+    /* NVS                                                                      */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize persistent storage first.
-     */
     err =
         hal_nvs_init();
 
@@ -325,17 +580,14 @@ static esp_err_t app_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* I2C                                                                    */
+    /* I2C                                                                     */
     /* ---------------------------------------------------------------------- */
 
     /*
-     * Initialize the I2C bus.
+     * Board mapping:
      *
-     * Board GPIO mapping:
-     *   SDA = GPIO 8
-     *   SCL = GPIO 9
-     *
-     * The I2C HAL owns the physical bus.
+     * SDA = GPIO8
+     * SCL = GPIO9
      */
     const hal_i2c_config_t i2c_config = {
 
@@ -366,15 +618,9 @@ static esp_err_t app_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* RTC                                                                    */
+    /* RTC                                                                     */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize the RTC manager.
-     *
-     * The RTC manager depends on the already initialized
-     * I2C HAL.
-     */
     err =
         rtc_manager_init();
 
@@ -394,19 +640,9 @@ static esp_err_t app_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* INA226                                                                 */
+    /* INA226                                                                  */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize INA226 current / voltage monitoring.
-     *
-     * Hardware:
-     *   INA226 address = 0x40
-     *   Shunt          = R010 = 0.010 Ohm
-     *   Current LSB    = 0.001 A
-     *
-     * The I2C HAL is already initialized.
-     */
     err =
         drv_ina226_init(
             &ina226_config);
@@ -435,14 +671,9 @@ static esp_err_t app_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* Condition Monitor                                                      */
+    /* Condition Monitor                                                       */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize the Condition Monitor.
-     *
-     * The INA226 driver must already be initialized.
-     */
     err =
         condition_monitor_manager_init(
             &condition_monitor_config);
@@ -459,27 +690,15 @@ static esp_err_t app_init(void)
 
     ESP_LOGI(
         TAG,
-        "Condition Monitor initialized: "
-        "OC=%.2f A "
-        "attempts=%u "
-        "bypass=%lu ms",
+        "Condition Monitor initialized: OC=%.2f A",
         (double)
-            condition_monitor_config.overcurrent_trip_a,
-        (unsigned)
-            condition_monitor_config.overcurrent_max_attempts,
-        (unsigned long)
-            condition_monitor_config.battery_bypass_timeout_ms);
+            condition_monitor_config.overcurrent_trip_a);
 
 
     /* ---------------------------------------------------------------------- */
-    /* Safety Manager                                                         */
+    /* Safety Manager                                                          */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize the Safety Manager.
-     *
-     * Safety Manager consumes Condition Monitor results.
-     */
     err =
         safety_manager_init(
             &safety_config);
@@ -496,24 +715,13 @@ static esp_err_t app_init(void)
 
     ESP_LOGI(
         TAG,
-        "Safety Manager initialized: "
-        "OC=%.2f A "
-        "max_runtime=%lu ms",
-        (double)
-            safety_config.overcurrent_trip_a,
-        (unsigned long)
-            safety_config.motor_max_runtime_ms);
+        "Safety Manager initialized");
 
 
     /* ---------------------------------------------------------------------- */
-    /* AS5600                                                                 */
+    /* AS5600                                                                  */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize the AS5600 driver.
-     *
-     * The AS5600 uses the shared I2C bus at address 0x36.
-     */
     const drv_as5600_config_t as5600_config = {
 
         .i2c_address =
@@ -540,12 +748,9 @@ static esp_err_t app_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* Encoder Manager                                                        */
+    /* Encoder Manager                                                         */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize the wrap-aware encoder manager.
-     */
     err =
         encoder_manager_init();
 
@@ -565,14 +770,9 @@ static esp_err_t app_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* Encoder Persistence                                                    */
+    /* Encoder Persistence                                                     */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize encoder persistence.
-     *
-     * NVS has already been initialized above.
-     */
     err =
         encoder_persistence_init();
 
@@ -592,17 +792,9 @@ static esp_err_t app_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* Encoder Position                                                       */
+    /* Encoder Position                                                        */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize absolute encoder position management.
-     *
-     * This depends on:
-     *   - AS5600 driver
-     *   - encoder manager
-     *   - encoder persistence
-     */
     err =
         encoder_position_init();
 
@@ -621,11 +813,10 @@ static esp_err_t app_init(void)
         "Encoder position manager initialized");
 
 
-    /*
-     * Restore the previously persisted absolute position.
-     *
-     * ESP_ERR_NOT_FOUND is a normal first-boot condition.
-     */
+    /* ---------------------------------------------------------------------- */
+    /* Restore Encoder Position                                                */
+    /* ---------------------------------------------------------------------- */
+
     err =
         encoder_position_restore();
 
@@ -653,16 +844,11 @@ static esp_err_t app_init(void)
     }
 
 
-    /*
-     * Read the first live AS5600 angle.
-     *
-     * encoder_position_update() deliberately treats this
-     * first sample as the new live reference and therefore
-     * does not create movement relative to the persisted
-     * last_angle.
-     */
-    uint16_t angle =
-        0U;
+    /* ---------------------------------------------------------------------- */
+    /* Initial Encoder Reading                                                */
+    /* ---------------------------------------------------------------------- */
+
+    uint16_t angle = 0U;
 
     err =
         drv_as5600_read_angle(
@@ -693,11 +879,11 @@ static esp_err_t app_init(void)
     }
 
 
-    /*
-     * Report the resulting position for diagnostics.
-     */
-    encoder_position_state_t position =
-        {0};
+    /* ---------------------------------------------------------------------- */
+    /* Encoder Diagnostic State                                               */
+    /* ---------------------------------------------------------------------- */
+
+    encoder_position_state_t position = {0};
 
     err =
         encoder_position_get_state(
@@ -726,23 +912,13 @@ static esp_err_t app_init(void)
             position.total_angle,
         (double)
             position.total_turns,
-        position.restored
-            ? "yes"
-            : "no");
+        position.restored ? "yes" : "no");
 
 
     /* ---------------------------------------------------------------------- */
     /* Battery Manager                                                        */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initialize the battery manager.
-     *
-     * Hardware mapping:
-     *   VBAT = GPIO1 = ADC1_CH0
-     *
-     * The battery manager owns this ADC channel.
-     */
     err =
         battery_manager_init(
             &battery_config);
@@ -763,14 +939,11 @@ static esp_err_t app_init(void)
         "GPIO1 / ADC1_CH0");
 
 
-    /*
-     * Take an initial battery measurement.
-     *
-     * This validates the ADC path during startup
-     * without yet applying motor-control battery policy.
-     */
-    battery_manager_reading_t battery =
-        {0};
+    /* ---------------------------------------------------------------------- */
+    /* Initial Battery Reading                                                */
+    /* ---------------------------------------------------------------------- */
+
+    battery_manager_reading_t battery = {0};
 
     err =
         battery_manager_read(
@@ -801,24 +974,13 @@ static esp_err_t app_init(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* A7670C Modem                                                          */
+    /* A7670C Modem                                                           */
     /* ---------------------------------------------------------------------- */
 
     /*
-     * Initialize the generic modem driver.
+     * Initial modem communication test.
      *
-     * Physical mapping:
-     *
-     *   UART1 TX = GPIO17
-     *   UART1 RX = GPIO18
-     *   PWRKEY   = GPIO6
-     *   RESET    = GPIO7
-     *   STATUS   = GPIO38
-     *
-     * The modem is not automatically power-cycled here.
-     *
-     * The first test determines whether the modem is already
-     * powered and responding to AT commands.
+     * No power-cycle is performed.
      */
     err =
         drv_modem_init(
@@ -832,48 +994,17 @@ static esp_err_t app_init(void)
             esp_err_to_name(err));
 
         /*
-         * LTE is not yet a mandatory dependency of the
-         * local actuator/safety baseline.
-         *
-         * Continue local operation if modem initialization
-         * fails.
+         * Modem is not required for Stage 2A safe
+         * hardware diagnostics.
          */
-        ESP_LOGW(
-            TAG,
-            "Continuing without LTE modem");
     }
     else {
 
         ESP_LOGI(
             TAG,
-            "A7670C modem driver initialized: "
-            "UART1 TX=%d "
-            "RX=%d "
-            "PWRKEY=%d "
-            "RESET=%d "
-            "STATUS=%d "
-            "baud=%lu",
-            BOARD_LTE_TX_GPIO,
-            BOARD_LTE_RX_GPIO,
-            BOARD_LTE_PWRKEY_GPIO,
-            BOARD_LTE_RESET_GPIO,
-            BOARD_LTE_STATUS_GPIO,
-            (unsigned long)
-                modem_config.baud_rate);
+            "A7670C modem driver initialized");
 
 
-        /* ------------------------------------------------------------------ */
-        /* Initial AT communication test                                      */
-        /* ------------------------------------------------------------------ */
-
-        /*
-         * Do NOT automatically press PWRKEY yet.
-         *
-         * The modem may already be powered.
-         *
-         * First test whether the currently powered modem responds
-         * to AT at 115200 baud.
-         */
         err =
             drv_modem_ping();
 
@@ -881,64 +1012,39 @@ static esp_err_t app_init(void)
 
             ESP_LOGW(
                 TAG,
-                "A7670C did not respond to AT "
-                "at 115200 baud: %s",
+                "A7670C AT ping failed: %s",
                 esp_err_to_name(err));
-
-            ESP_LOGW(
-                TAG,
-                "Modem may be powered off, "
-                "still booting, or using another baud rate");
         }
         else {
 
             ESP_LOGI(
                 TAG,
-                "A7670C AT communication OK");
-
-
-            /* -------------------------------------------------------------- */
-            /* Modem identification                                          */
-            /* -------------------------------------------------------------- */
-
-            drv_modem_info_t modem_info =
-                {0};
-
-            err =
-                drv_modem_get_info(
-                    &modem_info);
-
-            if (err != ESP_OK) {
-
-                ESP_LOGW(
-                    TAG,
-                    "A7670C identification failed: %s",
-                    esp_err_to_name(err));
-            }
-            else {
-
-                ESP_LOGI(
-                    TAG,
-                    "A7670C manufacturer: %s",
-                    modem_info.manufacturer);
-
-                ESP_LOGI(
-                    TAG,
-                    "A7670C model: %s",
-                    modem_info.model);
-
-                ESP_LOGI(
-                    TAG,
-                    "A7670C revision: %s",
-                    modem_info.revision);
-
-                ESP_LOGI(
-                    TAG,
-                    "A7670C IMEI: %s",
-                    modem_info.imei);
-            }
+                "A7670C AT ping passed");
         }
     }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* EOL Manager                                                             */
+    /* ---------------------------------------------------------------------- */
+
+    err =
+        eol_manager_init(
+            &eol_config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL manager initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "EOL manager initialized");
 
 
     return ESP_OK;
@@ -966,10 +1072,6 @@ void app_main(void)
             "Application initialization failed: %s",
             esp_err_to_name(err));
 
-        /*
-         * Do not continue into normal application
-         * runtime after mandatory initialization fails.
-         */
         while (1) {
 
             vTaskDelay(
@@ -984,29 +1086,56 @@ void app_main(void)
 
 
     /* ---------------------------------------------------------------------- */
-    /* Runtime monitoring                                                     */
+    /* EOL Stage 2A                                                           */
     /* ---------------------------------------------------------------------- */
 
     /*
-     * Runtime monitoring loop.
+     * Stage 2A runs once for bench validation.
      *
-     * Motor control is intentionally NOT connected yet.
+     * Safe tests:
      *
-     * Runtime sequence:
-     *
+     *   I2C
+     *   RTC
+     *   AS5600
      *   INA226
-     *       |
-     *       v
-     *   Condition Monitor
-     *       |
-     *       v
-     *   Safety Manager
-     *       |
-     *       v
-     *   Diagnostics only
+     *   Battery
      *
-     * motor_running is deliberately false until the actuator
-     * control layer is integrated and validated.
+     * No motor movement.
+     */
+    {
+        uint32_t now_ms =
+            (uint32_t)(
+                esp_timer_get_time() /
+                1000ULL);
+
+        err =
+            app_run_eol_stage2a(
+                now_ms);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "EOL Stage 2A failed: %s",
+                esp_err_to_name(err));
+        }
+        else {
+
+            ESP_LOGI(
+                TAG,
+                "EOL Stage 2A finished");
+        }
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Runtime Monitoring                                                     */
+    /* ---------------------------------------------------------------------- */
+
+    /*
+     * Motor control is not connected yet.
+     *
+     * Therefore motor_running remains false.
      */
     while (1) {
 
@@ -1015,16 +1144,12 @@ void app_main(void)
                 esp_timer_get_time() /
                 1000ULL);
 
-
-        /*
-         * Motor is not connected to this runtime stage.
-         */
         const bool motor_running =
             false;
 
 
         /* ------------------------------------------------------------------ */
-        /* Condition Monitor update                                            */
+        /* Condition Monitor update                                           */
         /* ------------------------------------------------------------------ */
 
         err =
@@ -1047,7 +1172,7 @@ void app_main(void)
 
 
         /* ------------------------------------------------------------------ */
-        /* Condition Monitor reading                                           */
+        /* Condition Monitor reading                                          */
         /* ------------------------------------------------------------------ */
 
         condition_monitor_reading_t reading =
@@ -1072,7 +1197,7 @@ void app_main(void)
 
 
         /* ------------------------------------------------------------------ */
-        /* Condition Monitor state                                             */
+        /* Condition Monitor state                                            */
         /* ------------------------------------------------------------------ */
 
         condition_monitor_state_t condition_state =
@@ -1097,14 +1222,9 @@ void app_main(void)
 
 
         /* ------------------------------------------------------------------ */
-        /* Safety Manager inputs                                                */
+        /* Safety Manager inputs                                               */
         /* ------------------------------------------------------------------ */
 
-        /*
-         * Safety Manager consumes Condition Monitor results.
-         *
-         * It does not read INA226 directly.
-         */
         const safety_manager_inputs_t safety_inputs = {
 
             .motor_running =
@@ -1143,7 +1263,7 @@ void app_main(void)
 
 
         /* ------------------------------------------------------------------ */
-        /* Safety Manager evaluation                                            */
+        /* Safety Manager evaluation                                           */
         /* ------------------------------------------------------------------ */
 
         safety_manager_output_t safety_output =
@@ -1173,11 +1293,6 @@ void app_main(void)
         /* Runtime diagnostics                                                 */
         /* ------------------------------------------------------------------ */
 
-        /*
-         * No actuator command is executed here.
-         *
-         * Safety requests are logged only.
-         */
         ESP_LOGI(
             TAG,
             "MON: "
