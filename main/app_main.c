@@ -1,7 +1,8 @@
-#include "freertos/FreeRTOS.h"
+﻿#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "hal_i2c.h"
 #include "hal_nvs.h"
@@ -57,7 +58,9 @@ static const battery_manager_config_t battery_config = {
     .channel = ADC_CHANNEL_0,
     .attenuation = ADC_ATTEN_DB_12,
     .bitwidth = ADC_BITWIDTH_DEFAULT,
+
     .divider_ratio = 11.0f,
+
     .critical_voltage_v = 11.2f,
     .cut_voltage_v = 11.6f,
     .low_voltage_v = 12.0f,
@@ -83,7 +86,7 @@ static const battery_manager_config_t battery_config = {
  *   1 mA / LSB
  *
  * Expected motor current range:
- *   6 A to 7 A configurable
+ *   approximately 6 A to 7 A
  *
  * Shunt voltage:
  *   6 A -> 60 mV
@@ -101,8 +104,11 @@ static const battery_manager_config_t battery_config = {
  */
 static const drv_ina226_config_t ina226_config = {
     .i2c_address = DRV_INA226_I2C_ADDRESS_DEFAULT,
+
     .shunt_resistance_ohms = 0.010f,
+
     .current_lsb_a = 0.001f,
+
     .config_register = 0U
 };
 
@@ -133,11 +139,15 @@ static const drv_ina226_config_t ina226_config = {
  */
 static const condition_monitor_config_t condition_monitor_config = {
     .warn_voltage_low_v = 12.0f,
+
     .cut_voltage_v = 11.6f,
+
     .critical_voltage_v = 11.2f,
+
     .reset_voltage_v = 12.0f,
 
     .overcurrent_trip_a = 6.0f,
+
     .overcurrent_max_attempts = 3U,
 
     .battery_bypass_timeout_ms = 120000U
@@ -156,6 +166,7 @@ static const condition_monitor_config_t condition_monitor_config = {
  */
 static const safety_manager_config_t safety_config = {
     .cut_voltage_v = 11.6f,
+
     .critical_voltage_v = 11.2f,
 
     .overcurrent_trip_a = 6.0f,
@@ -191,6 +202,7 @@ static esp_err_t app_init(void)
     err = hal_nvs_init();
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "NVS initialization failed: %s",
@@ -225,6 +237,7 @@ static esp_err_t app_init(void)
     err = hal_i2c_init(&i2c_config);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "I2C initialization failed: %s",
@@ -251,6 +264,7 @@ static esp_err_t app_init(void)
     err = rtc_manager_init();
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "RTC initialization failed: %s",
@@ -278,9 +292,11 @@ static esp_err_t app_init(void)
      *
      * The I2C HAL is already initialized.
      */
-    err = drv_ina226_init(&ina226_config);
+    err = drv_ina226_init(
+        &ina226_config);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "INA226 initialization failed: %s",
@@ -291,7 +307,8 @@ static esp_err_t app_init(void)
 
     ESP_LOGI(
         TAG,
-        "INA226 initialized: addr=0x%02X shunt=%.3f Ohm current_lsb=%.3f A",
+        "INA226 initialized: "
+        "addr=0x%02X shunt=%.3f Ohm current_lsb=%.3f A",
         ina226_config.i2c_address,
         (double)ina226_config.shunt_resistance_ohms,
         (double)ina226_config.current_lsb_a);
@@ -311,6 +328,7 @@ static esp_err_t app_init(void)
             &condition_monitor_config);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Condition Monitor initialization failed: %s",
@@ -321,8 +339,12 @@ static esp_err_t app_init(void)
 
     ESP_LOGI(
         TAG,
-        "Condition Monitor initialized: OC=%.2f A",
-        (double)condition_monitor_config.overcurrent_trip_a);
+        "Condition Monitor initialized: "
+        "OC=%.2f A attempts=%u bypass=%lu ms",
+        (double)condition_monitor_config.overcurrent_trip_a,
+        (unsigned)condition_monitor_config.overcurrent_max_attempts,
+        (unsigned long)
+            condition_monitor_config.battery_bypass_timeout_ms);
 
 
     /* ---------------------------------------------------------------------- */
@@ -332,16 +354,14 @@ static esp_err_t app_init(void)
     /*
      * Initialize the Safety Manager.
      *
-     * Safety consumes Condition Monitor results.
-     *
-     * It does not read INA226 directly.
-     * It does not use ADC/VBAT directly.
+     * Safety Manager consumes Condition Monitor results.
      */
     err =
         safety_manager_init(
             &safety_config);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Safety Manager initialization failed: %s",
@@ -352,11 +372,14 @@ static esp_err_t app_init(void)
 
     ESP_LOGI(
         TAG,
-        "Safety Manager initialized");
+        "Safety Manager initialized: "
+        "OC=%.2f A max_runtime=%lu ms",
+        (double)safety_config.overcurrent_trip_a,
+        (unsigned long)safety_config.motor_max_runtime_ms);
 
 
     /* ---------------------------------------------------------------------- */
-    /* AS5600                                                                 */
+    /* AS5600                                                                */
     /* ---------------------------------------------------------------------- */
 
     /*
@@ -368,9 +391,12 @@ static esp_err_t app_init(void)
         .i2c_address = DRV_AS5600_I2C_ADDRESS
     };
 
-    err = drv_as5600_init(&as5600_config);
+    err =
+        drv_as5600_init(
+            &as5600_config);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "AS5600 initialization failed: %s",
@@ -394,6 +420,7 @@ static esp_err_t app_init(void)
     err = encoder_manager_init();
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Encoder manager initialization failed: %s",
@@ -419,6 +446,7 @@ static esp_err_t app_init(void)
     err = encoder_persistence_init();
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Encoder persistence initialization failed: %s",
@@ -447,6 +475,7 @@ static esp_err_t app_init(void)
     err = encoder_position_init();
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Encoder position initialization failed: %s",
@@ -459,10 +488,6 @@ static esp_err_t app_init(void)
         TAG,
         "Encoder position manager initialized");
 
-
-    /* ---------------------------------------------------------------------- */
-    /* Restore Encoder Position                                               */
-    /* ---------------------------------------------------------------------- */
 
     /*
      * Restore the previously persisted absolute position.
@@ -477,7 +502,8 @@ static esp_err_t app_init(void)
             TAG,
             "No persisted encoder position found");
 
-    } else if (err != ESP_OK) {
+    }
+    else if (err != ESP_OK) {
 
         ESP_LOGE(
             TAG,
@@ -485,18 +511,14 @@ static esp_err_t app_init(void)
             esp_err_to_name(err));
 
         return err;
-
-    } else {
+    }
+    else {
 
         ESP_LOGI(
             TAG,
             "Encoder position restored");
     }
 
-
-    /* ---------------------------------------------------------------------- */
-    /* Initial Encoder Reading                                                */
-    /* ---------------------------------------------------------------------- */
 
     /*
      * Read the first live AS5600 angle.
@@ -508,9 +530,12 @@ static esp_err_t app_init(void)
      */
     uint16_t angle = 0U;
 
-    err = drv_as5600_read_angle(&angle);
+    err =
+        drv_as5600_read_angle(
+            &angle);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Initial AS5600 read failed: %s",
@@ -519,9 +544,12 @@ static esp_err_t app_init(void)
         return err;
     }
 
-    err = encoder_position_update(angle);
+    err =
+        encoder_position_update(
+            angle);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Initial encoder position update failed: %s",
@@ -531,18 +559,17 @@ static esp_err_t app_init(void)
     }
 
 
-    /* ---------------------------------------------------------------------- */
-    /* Encoder Diagnostic State                                               */
-    /* ---------------------------------------------------------------------- */
-
     /*
      * Report the resulting position for diagnostics.
      */
     encoder_position_state_t position = {0};
 
-    err = encoder_position_get_state(&position);
+    err =
+        encoder_position_get_state(
+            &position);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Encoder position state read failed: %s",
@@ -553,7 +580,8 @@ static esp_err_t app_init(void)
 
     ESP_LOGI(
         TAG,
-        "Encoder position: angle=%u total_angle=%lld turns=%.4f restored=%s",
+        "Encoder position: "
+        "angle=%u total_angle=%lld turns=%.4f restored=%s",
         (unsigned)position.angle,
         (long long)position.total_angle,
         (double)position.total_turns,
@@ -568,13 +596,16 @@ static esp_err_t app_init(void)
      * Initialize the battery manager.
      *
      * Hardware mapping:
-     *   VBAT = GPIO1 = ADC1 channel 0
+     *   VBAT = GPIO1 = ADC1_CH0
      *
      * The battery manager owns this ADC channel.
      */
-    err = battery_manager_init(&battery_config);
+    err =
+        battery_manager_init(
+            &battery_config);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Battery manager initialization failed: %s",
@@ -585,24 +616,24 @@ static esp_err_t app_init(void)
 
     ESP_LOGI(
         TAG,
-        "Battery manager initialized: GPIO1 / ADC1_CH0");
+        "Battery manager initialized: "
+        "GPIO1 / ADC1_CH0");
 
-
-    /* ---------------------------------------------------------------------- */
-    /* Initial Battery Reading                                                */
-    /* ---------------------------------------------------------------------- */
 
     /*
      * Take an initial battery measurement.
      *
-     * This validates the ADC path during startup without
-     * yet applying motor-control battery policy.
+     * This validates the ADC path during application startup
+     * without yet applying motor-control battery policy.
      */
     battery_manager_reading_t battery = {0};
 
-    err = battery_manager_read(&battery);
+    err =
+        battery_manager_read(
+            &battery);
 
     if (err != ESP_OK) {
+
         ESP_LOGE(
             TAG,
             "Initial battery read failed: %s",
@@ -613,15 +644,12 @@ static esp_err_t app_init(void)
 
     ESP_LOGI(
         TAG,
-        "Battery: ADC=%.3f V VBAT=%.3f V state=%d",
+        "Battery: ADC=%.3f V "
+        "VBAT=%.3f V state=%d",
         (double)battery.adc_voltage_v,
         (double)battery.battery_voltage_v,
         (int)battery.state);
 
-
-    /* ---------------------------------------------------------------------- */
-    /* Initialization complete                                                */
-    /* ---------------------------------------------------------------------- */
 
     return ESP_OK;
 }
@@ -637,7 +665,9 @@ void app_main(void)
         TAG,
         "GSM-VALVE firmware starting");
 
-    esp_err_t err = app_init();
+
+    esp_err_t err =
+        app_init();
 
     if (err != ESP_OK) {
 
@@ -647,26 +677,241 @@ void app_main(void)
             esp_err_to_name(err));
 
         /*
-         * Do not continue into normal application runtime
-         * after mandatory initialization fails.
+         * Do not continue into normal application
+         * runtime after mandatory initialization fails.
          */
         while (1) {
+
             vTaskDelay(
                 pdMS_TO_TICKS(1000));
         }
     }
 
+
     ESP_LOGI(
         TAG,
         "Application initialization complete");
 
+
+    /* ---------------------------------------------------------------------- */
+    /* Runtime monitoring                                                     */
+    /* ---------------------------------------------------------------------- */
+
     /*
-     * Runtime loop.
+     * Runtime monitoring loop.
      *
-     * Actual actuator control and periodic Condition Monitor /
-     * Safety evaluation will be connected here in the next stage.
+     * Motor control is intentionally NOT connected yet.
+     *
+     * Runtime sequence:
+     *
+     *   INA226
+     *       |
+     *       v
+     *   Condition Monitor
+     *       |
+     *       v
+     *   Safety Manager
+     *       |
+     *       v
+     *   Diagnostics only
+     *
+     * motor_running is deliberately false until the actuator
+     * control layer is integrated and validated.
      */
     while (1) {
+
+        uint32_t now_ms =
+            (uint32_t)(
+                esp_timer_get_time() /
+                1000ULL);
+
+        /*
+         * Motor is not connected to this runtime stage.
+         */
+        const bool motor_running = false;
+
+
+        /* ------------------------------------------------------------------ */
+        /* Condition Monitor update                                            */
+        /* ------------------------------------------------------------------ */
+
+        err =
+            condition_monitor_manager_update(
+                now_ms,
+                motor_running);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "Condition Monitor update failed: %s",
+                esp_err_to_name(err));
+
+            vTaskDelay(
+                pdMS_TO_TICKS(1000));
+
+            continue;
+        }
+
+
+        /* ------------------------------------------------------------------ */
+        /* Condition Monitor reading                                           */
+        /* ------------------------------------------------------------------ */
+
+        condition_monitor_reading_t reading = {0};
+
+        err =
+            condition_monitor_manager_get_reading(
+                &reading);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "Condition Monitor reading failed: %s",
+                esp_err_to_name(err));
+
+            vTaskDelay(
+                pdMS_TO_TICKS(1000));
+
+            continue;
+        }
+
+
+        /* ------------------------------------------------------------------ */
+        /* Condition Monitor state                                             */
+        /* ------------------------------------------------------------------ */
+
+        condition_monitor_state_t condition_state = {0};
+
+        err =
+            condition_monitor_manager_get_state(
+                &condition_state);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "Condition Monitor state failed: %s",
+                esp_err_to_name(err));
+
+            vTaskDelay(
+                pdMS_TO_TICKS(1000));
+
+            continue;
+        }
+
+
+        /* ------------------------------------------------------------------ */
+        /* Safety Manager inputs                                                */
+        /* ------------------------------------------------------------------ */
+
+        /*
+         * Safety Manager consumes Condition Monitor results.
+         *
+         * It does not read INA226 directly.
+         */
+        const safety_manager_inputs_t safety_inputs = {
+
+            .motor_running =
+                motor_running,
+
+            .bus_voltage_v =
+                reading.bus_voltage_v,
+
+            .voltage_valid =
+                reading.voltage_valid,
+
+            .motor_current_a =
+                reading.current_a,
+
+            .current_valid =
+                reading.current_valid,
+
+            .voltage_locked =
+                condition_state.voltage_state ==
+                    CONDITION_VOLTAGE_LOCKED,
+
+            .overcurrent =
+                condition_state.current_state ==
+                    CONDITION_CURRENT_OVERCURRENT,
+
+            .overcurrent_locked =
+                condition_state.current_state ==
+                    CONDITION_CURRENT_LOCKED,
+
+            .bypass_required =
+                condition_state.bypass_required,
+
+            .bypass_acknowledged =
+                condition_state.bypass_acknowledged
+        };
+
+
+        /* ------------------------------------------------------------------ */
+        /* Safety Manager evaluation                                            */
+        /* ------------------------------------------------------------------ */
+
+        safety_manager_output_t safety_output = {0};
+
+        err =
+            safety_manager_evaluate(
+                &safety_inputs,
+                now_ms,
+                &safety_output);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "Safety Manager evaluation failed: %s",
+                esp_err_to_name(err));
+
+            vTaskDelay(
+                pdMS_TO_TICKS(1000));
+
+            continue;
+        }
+
+
+        /* ------------------------------------------------------------------ */
+        /* Runtime diagnostics                                                 */
+        /* ------------------------------------------------------------------ */
+
+        /*
+         * No actuator command is executed here.
+         *
+         * Safety requests are logged only.
+         */
+        ESP_LOGI(
+            TAG,
+            "MON: "
+            "V=%.3f V "
+            "I=%.3f A "
+            "P=%.3f W "
+            "VState=%d "
+            "CState=%d "
+            "Safety=%d "
+            "AllowStart=%d "
+            "AllowRun=%d "
+            "Stop=%d "
+            "Close=%d "
+            "Bypass=%d "
+            "Fault=%d",
+            (double)reading.bus_voltage_v,
+            (double)reading.current_a,
+            (double)reading.power_w,
+            (int)condition_state.voltage_state,
+            (int)condition_state.current_state,
+            (int)safety_output.state,
+            safety_output.allow_motor_start,
+            safety_output.allow_motor_run,
+            safety_output.request_motor_stop,
+            safety_output.request_motor_close,
+            safety_output.bypass_required,
+            safety_output.fault);
+
+
         vTaskDelay(
             pdMS_TO_TICKS(1000));
     }
