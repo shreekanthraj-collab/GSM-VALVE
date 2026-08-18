@@ -3,6 +3,8 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_event.h"
+#include "esp_netif.h"
 
 #include "hal_i2c.h"
 #include "hal_nvs.h"
@@ -24,6 +26,7 @@
 
 #include "eol_manager.h"
 #include "eol_persistence.h"
+#include "eol_web.h"
 
 #include "board_config.h"
 
@@ -39,35 +42,14 @@ static const char *TAG = "GSM_VALVE";
 /* EOL persistence identity                                                   */
 /* -------------------------------------------------------------------------- */
 
-/*
- * Stage 2A hardware/configuration identity.
- *
- * This is currently a deterministic configuration fingerprint.
- *
- * It is NOT a cryptographic identity and does not yet claim to
- * uniquely identify every replaceable physical component.
- *
- * The fingerprint will be extended later when component-specific
- * hardware identity information is exposed by the drivers.
- */
 static const uint32_t EOL_HARDWARE_FINGERPRINT =
     0x47535632UL;
 
 
-/*
- * Firmware/EOL compatibility identity.
- *
- * If the EOL compatibility requirements change, this value must
- * change. A mismatch causes the previous factory EOL result to
- * require re-verification.
- */
 static const uint32_t EOL_FIRMWARE_FINGERPRINT =
     0x00010001UL;
 
 
-/*
- * Firmware identification stored with the factory EOL record.
- */
 static const char *EOL_FIRMWARE_VERSION =
     "GSM-VALVE";
 
@@ -114,27 +96,6 @@ static const battery_manager_config_t battery_config = {
 /* INA226 configuration                                                       */
 /* -------------------------------------------------------------------------- */
 
-/*
- * GSM-VALVE INA226 hardware:
- *
- * I2C address:
- *   0x40
- *
- * Shunt:
- *   R010 = 0.010 Ohm
- *
- * Current LSB:
- *   1 mA / LSB
- *
- * Calibration:
- *
- *   CAL = 0.00512 / (Current_LSB * R_SHUNT)
- *       = 0.00512 / (0.001 * 0.010)
- *       = 512
- *
- * config_register = 0 selects the driver's default
- * continuous shunt + bus conversion configuration.
- */
 static const drv_ina226_config_t ina226_config = {
 
     .i2c_address =
@@ -155,25 +116,6 @@ static const drv_ina226_config_t ina226_config = {
 /* Condition Monitor configuration                                            */
 /* -------------------------------------------------------------------------- */
 
-/*
- * Electrical protection policy.
- *
- * Voltage:
- *
- *   critical = 11.2 V
- *   cut      = 11.6 V
- *   warning  = 12.0 V
- *   reset    = 12.0 V
- *
- * Current:
- *
- *   OC trip       = 6.0 A
- *   max attempts  = 3
- *
- * Bypass:
- *
- *   120 seconds.
- */
 static const condition_monitor_config_t condition_monitor_config = {
 
     .warn_voltage_low_v =
@@ -203,12 +145,6 @@ static const condition_monitor_config_t condition_monitor_config = {
 /* Safety Manager configuration                                               */
 /* -------------------------------------------------------------------------- */
 
-/*
- * Safety consumes Condition Monitor results.
- *
- * It does not directly access INA226.
- * It does not directly access ADC/VBAT.
- */
 static const safety_manager_config_t safety_config = {
 
     .cut_voltage_v =
@@ -223,9 +159,6 @@ static const safety_manager_config_t safety_config = {
     .battery_bypass_timeout_ms =
         120000U,
 
-    /*
-     * Temporary baseline motor runtime limit.
-     */
     .motor_max_runtime_ms =
         120000U
 };
@@ -235,21 +168,6 @@ static const safety_manager_config_t safety_config = {
 /* EOL Manager configuration                                                  */
 /* -------------------------------------------------------------------------- */
 
-/*
- * EOL Stage 2A.
- *
- * Safe diagnostic tests only:
- *
- *   1. I2C scan
- *   2. RTC
- *   3. AS5600 encoder
- *   4. INA226
- *   5. Battery
- *
- * Motor tests remain disabled.
- *
- * No relay or motor output is activated by EOL.
- */
 static const eol_manager_config_t eol_config = {
 
     .overall_timeout_ms =
@@ -270,23 +188,42 @@ static const eol_manager_config_t eol_config = {
 
 
 /* -------------------------------------------------------------------------- */
-/* A7670C modem configuration                                                 */
+/* EOL Web configuration                                                      */
 /* -------------------------------------------------------------------------- */
 
 /*
- * A7670C LTE modem.
+ * WPK-027A bench EOL web interface.
  *
- * Initial UART baud:
+ * SoftAP:
  *
- *   115200
+ *     SSID     = GSM-VALVE-EOL
+ *     Password = none
+ *     Address  = 192.168.4.1
  *
- * IMPORTANT:
+ * This is intentionally an open local bench network.
  *
- * 115200 is only the initial communication-test setting.
- * It has not yet been confirmed against the physical modem.
- *
- * The modem is not automatically power-cycled here.
+ * Production EOL security policy will be added later.
  */
+static const eol_web_config_t eol_web_config = {
+
+    .ssid =
+        "GSM-VALVE-EOL",
+
+    .password =
+        "",
+
+    .max_connections =
+        1U,
+
+    .start_http_server =
+        true
+};
+
+
+/* -------------------------------------------------------------------------- */
+/* A7670C modem configuration                                                 */
+/* -------------------------------------------------------------------------- */
+
 static const drv_modem_config_t modem_config = {
 
     .uart_port =
@@ -331,11 +268,6 @@ static const drv_modem_config_t modem_config = {
 /* EOL Stage 2A runner                                                        */
 /* -------------------------------------------------------------------------- */
 
-/*
- * Run the five safe EOL diagnostics.
- *
- * No motor movement is performed.
- */
 static esp_err_t app_run_eol_stage2a(
     uint32_t now_ms)
 {
@@ -742,6 +674,60 @@ static void app_log_eol_persistence_status(void)
 
 
 /* -------------------------------------------------------------------------- */
+/* Network initialization                                                     */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Initialize the ESP-IDF network/event-loop infrastructure required by
+ * the local EOL SoftAP.
+ *
+ * This function does not start Wi-Fi.
+ */
+static esp_err_t app_init_network_stack(void)
+{
+    esp_err_t err;
+
+
+    err =
+        esp_netif_init();
+
+    if (err != ESP_OK &&
+        err != ESP_ERR_INVALID_STATE) {
+
+        ESP_LOGE(
+            TAG,
+            "esp_netif_init failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    err =
+        esp_event_loop_create_default();
+
+    if (err != ESP_OK &&
+        err != ESP_ERR_INVALID_STATE) {
+
+        ESP_LOGE(
+            TAG,
+            "Default event loop initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    ESP_LOGI(
+        TAG,
+        "Network/event infrastructure initialized");
+
+
+    return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
 /* Application initialization                                                 */
 /* -------------------------------------------------------------------------- */
 
@@ -794,10 +780,6 @@ static esp_err_t app_init(void)
         "EOL persistence initialized");
 
 
-    /*
-     * Configure the identity currently represented by the
-     * Stage 2A hardware/configuration baseline.
-     */
     err =
         eol_persistence_set_hardware_fingerprint(
             EOL_HARDWARE_FINGERPRINT);
@@ -864,12 +846,6 @@ static esp_err_t app_init(void)
     /* I2C                                                                     */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Board mapping:
-     *
-     * SDA = GPIO8
-     * SCL = GPIO9
-     */
     const hal_i2c_config_t i2c_config = {
 
         .frequency_hz =
@@ -1262,11 +1238,6 @@ static esp_err_t app_init(void)
     /* A7670C Modem                                                           */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Initial modem communication test.
-     *
-     * No power-cycle is performed.
-     */
     err =
         drv_modem_init(
             &modem_config);
@@ -1277,11 +1248,6 @@ static esp_err_t app_init(void)
             TAG,
             "A7670C modem initialization failed: %s",
             esp_err_to_name(err));
-
-        /*
-         * Modem is not required for Stage 2A safe
-         * hardware diagnostics.
-         */
     }
     else {
 
@@ -1333,6 +1299,85 @@ static esp_err_t app_init(void)
         "EOL manager initialized");
 
 
+    /* ---------------------------------------------------------------------- */
+    /* Network infrastructure                                                  */
+    /* ---------------------------------------------------------------------- */
+
+    err =
+        app_init_network_stack();
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Network infrastructure initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* EOL Web                                                                  */
+    /* ---------------------------------------------------------------------- */
+
+    err =
+        eol_web_init(
+            &eol_web_config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL web initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    ESP_LOGI(
+        TAG,
+        "EOL web subsystem initialized");
+
+
+    err =
+        eol_web_start();
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL web server start failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    ESP_LOGI(
+        TAG,
+        "==================================================");
+
+    ESP_LOGI(
+        TAG,
+        "EOL WEB READY");
+
+    ESP_LOGI(
+        TAG,
+        "SSID: %s",
+        eol_web_get_ssid());
+
+    ESP_LOGI(
+        TAG,
+        "Open: http://%s/",
+        eol_web_get_ip_address());
+
+    ESP_LOGI(
+        TAG,
+        "==================================================");
+
+
     return ESP_OK;
 }
 
@@ -1378,7 +1423,9 @@ void app_main(void)
     /* ---------------------------------------------------------------------- */
 
     /*
-     * Stage 2A runs once for the current bench-validation firmware.
+     * Stage 2A remains automatic for WPK-027A.
+     *
+     * The web RUN EOL button is NOT connected to execution yet.
      *
      * Safe tests:
      *
