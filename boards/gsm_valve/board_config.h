@@ -44,9 +44,31 @@
 
 #define BOARD_LIMIT_SWITCH_GPIO      (-1)
 #define BOARD_RTC_INT_GPIO           (-1)
-#define BOARD_LTE_PWRKEY_GPIO        (-1)
-#define BOARD_LTE_RESET_GPIO         (-1)
-#define BOARD_LTE_STATUS_GPIO        (-1)
+
+/*
+ * SIMCom A7670C LTE modem.
+ *
+ * Hardware reference:
+ *
+ *   ESP32-S3 GPIO 17 -> UART1 TXD
+ *   ESP32-S3 GPIO 18 -> UART1 RXD
+ *   ESP32-S3 GPIO 6  -> LTE PWRKEY
+ *   ESP32-S3 GPIO 7  -> LTE RESET
+ *   ESP32-S3 GPIO 38 -> LTE STATUS
+ *
+ * UART baud rate is intentionally not defined here.
+ * It belongs to the modem configuration layer and will
+ * initially use the modem driver's 115200 default until
+ * verified against the physical A7670C.
+ */
+
+#define BOARD_LTE_UART_PORT          UART_NUM_1
+#define BOARD_LTE_TX_GPIO            17
+#define BOARD_LTE_RX_GPIO            18
+#define BOARD_LTE_PWRKEY_GPIO        6
+#define BOARD_LTE_RESET_GPIO         7
+#define BOARD_LTE_STATUS_GPIO        38
+
 #define BOARD_BUZZER_GPIO            (-1)
 #define BOARD_VBAT_ADC_GPIO          1
 
