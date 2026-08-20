@@ -13,37 +13,50 @@ extern "C" {
 
 
 /* -------------------------------------------------------------------------- */
-/* EOL persistence constants                                                  */
+/* Persistence constants                                                      */
 /* -------------------------------------------------------------------------- */
 
 /*
- * NVS namespace used exclusively for the factory EOL record.
+ * Dedicated NVS namespace for EOL persistence.
  */
-#define EOL_PERSISTENCE_NAMESPACE          "eol"
+#define EOL_PERSISTENCE_NAMESPACE              "eol"
 
 /*
- * Persistent-record magic.
+ * NVS key used for the persisted EOL result record.
+ */
+#define EOL_PERSISTENCE_RECORD_KEY             "eol_record"
+
+/*
+ * NVS key used for the persisted factory operating configuration.
+ */
+#define EOL_PERSISTENCE_FACTORY_CONFIG_KEY     "factory_cfg"
+
+/*
+ * Persistent record magic.
  *
  * "EOL1" in hexadecimal.
  */
-#define EOL_PERSISTENCE_MAGIC              0x454F4C31UL
+#define EOL_PERSISTENCE_MAGIC                  0x454F4C31UL
 
 /*
- * Persistent record schema.
+ * Persistent record format version.
  *
- * Increment this when the stored EOL record format changes.
+ * Increment when the eol_persisted_record_t binary layout changes.
  */
-#define EOL_PERSISTENCE_SCHEMA_VERSION    1U
+#define EOL_PERSISTENCE_RECORD_VERSION         1U
 
 /*
- * EOL compatibility version.
+ * Compatibility version.
  *
- * Increment this when a firmware/hardware change requires the
- * actuator to undergo EOL re-verification.
- *
- * This is deliberately independent from the firmware version.
+ * Increment when a firmware/hardware change requires factory
+ * EOL re-verification.
  */
-#define EOL_COMPATIBILITY_VERSION          1U
+#define EOL_PERSISTENCE_COMPATIBILITY_VERSION  1U
+
+/*
+ * Maximum firmware-version string length including terminating NUL.
+ */
+#define EOL_PERSISTENCE_FIRMWARE_VERSION_MAX_LEN  32U
 
 
 /* -------------------------------------------------------------------------- */
@@ -52,26 +65,12 @@ extern "C" {
 
 typedef enum
 {
-    /*
-     * No valid factory EOL record exists.
-     */
     EOL_PERSISTENCE_NOT_TESTED = 0,
 
-    /*
-     * A completed EOL record exists and its identity still matches
-     * the currently installed hardware/configuration.
-     */
     EOL_PERSISTENCE_VALID,
 
-    /*
-     * A previous EOL record exists, but its identity or compatibility
-     * information no longer matches the current device.
-     */
     EOL_PERSISTENCE_REVERIFICATION_REQUIRED,
 
-    /*
-     * A completed EOL record exists and the recorded EOL result was FAIL.
-     */
     EOL_PERSISTENCE_FAILED
 
 } eol_persistence_validity_t;
@@ -82,38 +81,58 @@ typedef enum
 /* -------------------------------------------------------------------------- */
 
 /*
- * This structure represents the factory EOL result stored in NVS.
+ * Factory EOL result stored in NVS.
  *
- * IMPORTANT:
+ * This structure follows the current eol_persistence.c implementation.
  *
- * The previous record is retained when a fingerprint mismatch is
- * detected. A new record replaces it only after a new EOL run has
- * completed and the result has been explicitly saved.
+ * The previous record is retained when identity or compatibility
+ * changes. A new record replaces it only after a completed EOL result
+ * is explicitly saved.
  */
 typedef struct
 {
+    /*
+     * Persistent record identity.
+     */
     uint32_t magic;
 
-    uint16_t schema_version;
+    uint32_t record_version;
 
-    uint16_t compatibility_version;
-
-
-    /* ---------------------------------------------------------------------- */
-    /* Factory result                                                         */
-    /* ---------------------------------------------------------------------- */
-
-    bool completed;
-
-    bool passed;
+    uint32_t compatibility_version;
 
 
-    /* ---------------------------------------------------------------------- */
-    /* EOL execution information                                             */
-    /* ---------------------------------------------------------------------- */
+    /*
+     * Device identity.
+     */
+    uint32_t hardware_fingerprint;
 
-    uint32_t completed_timestamp;
+    uint32_t firmware_fingerprint;
 
+
+    /*
+     * Firmware version associated with this EOL record.
+     */
+    char firmware_version[
+        EOL_PERSISTENCE_FIRMWARE_VERSION_MAX_LEN];
+
+
+    /*
+     * Overall EOL result.
+     */
+    eol_overall_result_t overall_result;
+
+
+    /*
+     * EOL execution timing.
+     */
+    uint32_t started_ms;
+
+    uint32_t completed_ms;
+
+
+    /*
+     * Test counters.
+     */
     uint32_t tests_passed;
 
     uint32_t tests_failed;
@@ -123,42 +142,16 @@ typedef struct
     uint32_t tests_not_run;
 
 
-    /* ---------------------------------------------------------------------- */
-    /* Identity                                                                */
-    /* ---------------------------------------------------------------------- */
+    /*
+     * Individual test results.
+     */
+    uint8_t test_result[
+        EOL_TEST_COUNT];
+
 
     /*
-     * Hardware identity fingerprint.
-     *
-     * This represents the physical hardware/configuration that was
-     * verified during the EOL run.
+     * Diagnostic values.
      */
-    uint32_t hardware_fingerprint;
-
-    /*
-     * Firmware/build identity fingerprint.
-     *
-     * This is separate from the hardware fingerprint.
-     */
-    uint32_t firmware_fingerprint;
-
-    /*
-     * EOL compatibility version used when the test was performed.
-     */
-    uint32_t eol_compatibility_version;
-
-
-    /* ---------------------------------------------------------------------- */
-    /* Individual test results                                                */
-    /* ---------------------------------------------------------------------- */
-
-    uint8_t test_result[EOL_TEST_COUNT];
-
-
-    /* ---------------------------------------------------------------------- */
-    /* Diagnostic values                                                      */
-    /* ---------------------------------------------------------------------- */
-
     uint16_t encoder_angle;
 
     float battery_voltage_v;
@@ -168,13 +161,6 @@ typedef struct
     float ina226_current_a;
 
     float ina226_power_w;
-
-
-    /* ---------------------------------------------------------------------- */
-    /* Firmware identification                                                */
-    /* ---------------------------------------------------------------------- */
-
-    char firmware_version[32];
 
 
 } eol_persisted_record_t;
@@ -187,10 +173,8 @@ typedef struct
 /*
  * Initialize the EOL persistence subsystem.
  *
- * This opens the dedicated "eol" NVS namespace and loads the
- * previously stored factory result if one exists.
- *
- * This function does NOT erase an existing record.
+ * Opens the dedicated NVS namespace and restores any existing
+ * factory EOL record/configuration.
  */
 esp_err_t eol_persistence_init(void);
 
@@ -201,15 +185,58 @@ esp_err_t eol_persistence_init(void);
 esp_err_t eol_persistence_deinit(void);
 
 
+/*
+ * Return whether the persistence subsystem is initialized.
+ */
+bool eol_persistence_is_initialized(void);
+
+
+/* -------------------------------------------------------------------------- */
+/* Factory operating configuration                                            */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Save the factory operating configuration.
+ *
+ * The configuration must already have passed
+ * eol_manager_validate_factory_config().
+ */
+esp_err_t eol_persistence_save_factory_config(
+    const eol_factory_config_t *config);
+
+
+/*
+ * Load the persisted factory operating configuration.
+ *
+ * ESP_ERR_NOT_FOUND means no configuration exists.
+ */
+esp_err_t eol_persistence_load_factory_config(
+    eol_factory_config_t *config);
+
+
+/*
+ * Check whether a factory operating configuration exists.
+ *
+ * The result is returned through 'present'.
+ */
+esp_err_t eol_persistence_has_factory_config(
+    bool *present);
+
+
+/*
+ * Clear only the factory operating configuration.
+ *
+ * The EOL result record is not affected.
+ */
+esp_err_t eol_persistence_clear_factory_config(void);
+
+
 /* -------------------------------------------------------------------------- */
 /* Current identity                                                           */
 /* -------------------------------------------------------------------------- */
 
 /*
  * Set the current hardware identity fingerprint.
- *
- * The fingerprint represents the hardware/configuration currently
- * installed in the device.
  */
 esp_err_t eol_persistence_set_hardware_fingerprint(
     uint32_t fingerprint);
@@ -223,56 +250,55 @@ esp_err_t eol_persistence_set_firmware_fingerprint(
 
 
 /*
- * Set the firmware version string associated with the current device.
+ * Set the firmware version associated with the current device.
  */
 esp_err_t eol_persistence_set_firmware_version(
     const char *version);
 
 
 /*
- * Get the currently configured hardware fingerprint.
+ * Get current hardware fingerprint.
  */
 uint32_t eol_persistence_get_hardware_fingerprint(void);
 
 
 /*
- * Get the currently configured firmware fingerprint.
+ * Get current firmware fingerprint.
  */
 uint32_t eol_persistence_get_firmware_fingerprint(void);
 
 
 /* -------------------------------------------------------------------------- */
-/* Factory EOL record                                                         */
+/* EOL record                                                                 */
 /* -------------------------------------------------------------------------- */
 
 /*
- * Load the saved factory EOL record.
+ * Load the persisted EOL record.
  *
- * Returns ESP_ERR_NOT_FOUND when no factory EOL record exists.
+ * ESP_ERR_NOT_FOUND means no EOL record exists.
  */
 esp_err_t eol_persistence_load(
     eol_persisted_record_t *record);
 
 
 /*
- * Save a completed EOL result as the new factory record.
- *
- * The supplied result must represent a completed EOL run.
- *
- * This operation replaces the previous factory record only after
- * the new result has been successfully written and committed.
+ * Save a completed EOL result as the factory record.
  */
 esp_err_t eol_persistence_save_result(
     const eol_status_t *status);
 
 
 /*
- * Clear the stored factory EOL record.
- *
- * This is an explicit maintenance operation and is NOT performed
- * automatically when identity changes.
+ * Clear the persisted EOL result record.
  */
 esp_err_t eol_persistence_clear(void);
+
+
+/*
+ * Get the currently cached EOL record.
+ */
+esp_err_t eol_persistence_get_record(
+    eol_persisted_record_t *record);
 
 
 /* -------------------------------------------------------------------------- */
@@ -280,76 +306,60 @@ esp_err_t eol_persistence_clear(void);
 /* -------------------------------------------------------------------------- */
 
 /*
- * Determine the validity of the stored factory EOL result against
- * the currently configured hardware/firmware identity.
+ * Determine validity of the stored EOL record against the current
+ * device identity and compatibility version.
  */
 eol_persistence_validity_t eol_persistence_get_validity(void);
 
 
 /*
- * Return true when a valid factory EOL PASS exists for the current
- * hardware/configuration/compatibility identity.
+ * Return true when a valid factory EOL PASS exists.
  */
 bool eol_persistence_is_valid(void);
 
 
 /*
- * Return true when a new EOL run is required before the device can
- * be considered factory-verified.
+ * Return true when EOL re-verification is required.
  */
 bool eol_persistence_is_reverification_required(void);
 
 
 /*
- * Return true when no factory EOL result has ever been stored.
+ * Return true when no factory EOL result exists.
  */
 bool eol_persistence_is_not_tested(void);
 
 
 /*
- * Return true when the stored factory EOL result itself was FAIL.
+ * Return true when the stored EOL result is FAIL.
  */
 bool eol_persistence_is_failed(void);
 
 
 /* -------------------------------------------------------------------------- */
-/* Status                                                                      */
+/* Stored identity                                                            */
 /* -------------------------------------------------------------------------- */
 
 /*
- * Check whether the persistence manager is initialized.
- */
-bool eol_persistence_is_initialized(void);
-
-
-/*
- * Get the currently cached factory EOL record.
- *
- * Returns ESP_ERR_NOT_FOUND if no record exists.
- */
-esp_err_t eol_persistence_get_record(
-    eol_persisted_record_t *record);
-
-
-/*
- * Get the stored hardware fingerprint.
+ * Get stored hardware fingerprint.
  */
 esp_err_t eol_persistence_get_stored_hardware_fingerprint(
     uint32_t *fingerprint);
 
 
 /*
- * Get the stored firmware fingerprint.
+ * Get stored firmware fingerprint.
  */
 esp_err_t eol_persistence_get_stored_firmware_fingerprint(
     uint32_t *fingerprint);
 
 
 /*
- * Get the stored EOL compatibility version.
+ * Get stored compatibility version.
+ *
+ * The current implementation returns the value directly.
  */
-esp_err_t eol_persistence_get_stored_compatibility_version(
-    uint32_t *version);
+uint32_t eol_persistence_get_stored_compatibility_version(void);
 
 
 /* -------------------------------------------------------------------------- */
@@ -357,9 +367,9 @@ esp_err_t eol_persistence_get_stored_compatibility_version(
 /* -------------------------------------------------------------------------- */
 
 /*
- * Evaluate the stored EOL record against the current identity.
+ * Evaluate the stored record against the current identity.
  *
- * This function does not modify or erase the stored record.
+ * Does not erase the stored record.
  */
 esp_err_t eol_persistence_validate_current_identity(void);
 
@@ -367,11 +377,19 @@ esp_err_t eol_persistence_validate_current_identity(void);
 /*
  * Mark the current device as requiring EOL re-verification.
  *
- * This changes the in-memory validity state only.
- *
- * The previous factory result remains stored for traceability.
+ * The previous record remains stored.
  */
 esp_err_t eol_persistence_require_reverification(void);
+
+
+/* -------------------------------------------------------------------------- */
+/* Compatibility                                                              */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Return the firmware's current EOL compatibility version.
+ */
+uint32_t eol_persistence_get_compatibility_version(void);
 
 
 /* -------------------------------------------------------------------------- */
@@ -380,19 +398,10 @@ esp_err_t eol_persistence_require_reverification(void);
 
 /*
  * Calculate a deterministic fingerprint from a byte buffer.
- *
- * This is provided so the application can construct hardware and
- * configuration fingerprints without accessing NVS directly.
  */
 uint32_t eol_persistence_calculate_fingerprint(
     const void *data,
     uint32_t length);
-
-
-/*
- * Return the fixed EOL compatibility version used by this firmware.
- */
-uint32_t eol_persistence_get_compatibility_version(void);
 
 
 #ifdef __cplusplus

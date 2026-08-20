@@ -1,6 +1,7 @@
 #include "eol_manager.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -40,6 +41,32 @@ static const char *TAG = "EOL";
 
 
 /* -------------------------------------------------------------------------- */
+/* Factory default configuration                                              */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * These are factory fallback values only.
+ *
+ * They are NOT the firmware absolute safety limits.
+ *
+ * During EOL, these values may be replaced by the technician's
+ * production configuration after validation.
+ *
+ * After EOL, the accepted configuration is persisted by the
+ * EOL persistence manager.
+ */
+#define EOL_DEFAULT_VOLTAGE_WARN_LOW_V          12.0f
+#define EOL_DEFAULT_VOLTAGE_WARN_HIGH_V         12.4f
+#define EOL_DEFAULT_VOLTAGE_CUTOFF_V            11.6f
+#define EOL_DEFAULT_VOLTAGE_CRITICAL_V          11.2f
+#define EOL_DEFAULT_VOLTAGE_RESET_V             12.0f
+#define EOL_DEFAULT_VOLTAGE_BYPASS_TIMEOUT_MS   120000U
+
+#define EOL_DEFAULT_CURRENT_MIN_SAFE_A          1.0f
+#define EOL_DEFAULT_CURRENT_MAX_SAFE_A          5.0f
+
+
+/* -------------------------------------------------------------------------- */
 /* Internal state                                                             */
 /* -------------------------------------------------------------------------- */
 
@@ -52,7 +79,33 @@ static eol_manager_config_t s_config = {
     .test_timeout_ms = 10000U,
     .motor_test_runtime_ms = 2000U,
     .motor_min_turns = 0.05f,
-    .motor_max_current_a = 6.0f
+    .motor_max_current_a = 5.0f,
+
+    .factory_config = {
+        .voltage_warn_low_v =
+            EOL_DEFAULT_VOLTAGE_WARN_LOW_V,
+
+        .voltage_warn_high_v =
+            EOL_DEFAULT_VOLTAGE_WARN_HIGH_V,
+
+        .voltage_cutoff_v =
+            EOL_DEFAULT_VOLTAGE_CUTOFF_V,
+
+        .voltage_critical_v =
+            EOL_DEFAULT_VOLTAGE_CRITICAL_V,
+
+        .voltage_reset_v =
+            EOL_DEFAULT_VOLTAGE_RESET_V,
+
+        .voltage_bypass_timeout_ms =
+            EOL_DEFAULT_VOLTAGE_BYPASS_TIMEOUT_MS,
+
+        .current_min_safe_a =
+            EOL_DEFAULT_CURRENT_MIN_SAFE_A,
+
+        .current_max_safe_a =
+            EOL_DEFAULT_CURRENT_MAX_SAFE_A
+    }
 };
 
 static eol_status_t s_status;
@@ -276,6 +329,359 @@ static void reset_status(void)
 
 
 /* -------------------------------------------------------------------------- */
+/* Factory configuration                                                      */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Validate the factory operating configuration against the firmware's
+ * absolute safety boundaries.
+ *
+ * IMPORTANT:
+ *
+ * This function does not write NVS.
+ *
+ * It is deliberately usable by both:
+ *
+ *     1. EOL/factory commissioning
+ *     2. AWS/field configuration
+ *
+ * Therefore there is one common safety gate for configuration changes.
+ */
+esp_err_t eol_manager_validate_factory_config(
+    const eol_factory_config_t *config)
+{
+    if (config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Reject non-finite floating point values                               */
+    /* ---------------------------------------------------------------------- */
+
+    if (!isfinite(config->voltage_warn_low_v) ||
+        !isfinite(config->voltage_warn_high_v) ||
+        !isfinite(config->voltage_cutoff_v) ||
+        !isfinite(config->voltage_critical_v) ||
+        !isfinite(config->voltage_reset_v) ||
+        !isfinite(config->current_min_safe_a) ||
+        !isfinite(config->current_max_safe_a)) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: non-finite value");
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Voltage absolute safety boundaries                                    */
+    /* ---------------------------------------------------------------------- */
+
+    if (config->voltage_warn_low_v <
+            EOL_ABS_VOLTAGE_WARN_LOW_MIN_V ||
+        config->voltage_warn_low_v >
+            EOL_ABS_VOLTAGE_WARN_LOW_MAX_V) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: warn-low %.3f V outside "
+            "absolute limits",
+            (double)config->voltage_warn_low_v);
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    if (config->voltage_warn_high_v <
+            EOL_ABS_VOLTAGE_WARN_HIGH_MIN_V ||
+        config->voltage_warn_high_v >
+            EOL_ABS_VOLTAGE_WARN_HIGH_MAX_V) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: warn-high %.3f V outside "
+            "absolute limits",
+            (double)config->voltage_warn_high_v);
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    if (config->voltage_cutoff_v <
+            EOL_ABS_VOLTAGE_CUTOFF_MIN_V ||
+        config->voltage_cutoff_v >
+            EOL_ABS_VOLTAGE_CUTOFF_MAX_V) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: cutoff %.3f V outside "
+            "absolute limits",
+            (double)config->voltage_cutoff_v);
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    if (config->voltage_critical_v <
+            EOL_ABS_VOLTAGE_CRITICAL_MIN_V ||
+        config->voltage_critical_v >
+            EOL_ABS_VOLTAGE_CRITICAL_MAX_V) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: critical %.3f V outside "
+            "absolute limits",
+            (double)config->voltage_critical_v);
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    if (config->voltage_reset_v <
+            EOL_ABS_VOLTAGE_RESET_MIN_V ||
+        config->voltage_reset_v >
+            EOL_ABS_VOLTAGE_RESET_MAX_V) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: reset %.3f V outside "
+            "absolute limits",
+            (double)config->voltage_reset_v);
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Voltage relationship validation                                        */
+    /* ---------------------------------------------------------------------- */
+
+    /*
+     * Expected battery hierarchy:
+     *
+     *     WARN_HIGH
+     *        >
+     *     RESET
+     *        >
+     *     WARN_LOW
+     *        >
+     *     CUTOFF
+     *        >
+     *     CRITICAL
+     *
+     * This prevents a configuration that is numerically inside the
+     * absolute boundaries but logically unsafe.
+     */
+
+    if (!(config->voltage_warn_high_v >
+          config->voltage_reset_v)) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: "
+            "warn-high must be greater than reset");
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    if (!(config->voltage_reset_v >
+          config->voltage_warn_low_v)) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: "
+            "reset must be greater than warn-low");
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    if (!(config->voltage_warn_low_v >
+          config->voltage_cutoff_v)) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: "
+            "warn-low must be greater than cutoff");
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    if (!(config->voltage_cutoff_v >
+          config->voltage_critical_v)) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: "
+            "cutoff must be greater than critical");
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Bypass timeout                                                         */
+    /* ---------------------------------------------------------------------- */
+
+    if (config->voltage_bypass_timeout_ms == 0U) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: bypass timeout is zero");
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Current absolute safety boundaries                                    */
+    /* ---------------------------------------------------------------------- */
+
+    if (config->current_min_safe_a <
+            EOL_ABS_CURRENT_MIN_SAFE_MIN_A ||
+        config->current_min_safe_a >
+            EOL_ABS_CURRENT_MIN_SAFE_MAX_A) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: minimum current %.3f A "
+            "outside absolute limits",
+            (double)config->current_min_safe_a);
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    if (config->current_max_safe_a <
+            EOL_ABS_CURRENT_MAX_SAFE_MIN_A ||
+        config->current_max_safe_a >
+            EOL_ABS_CURRENT_MAX_SAFE_MAX_A) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: maximum current %.3f A "
+            "outside absolute limits",
+            (double)config->current_max_safe_a);
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Current relationship                                                   */
+    /* ---------------------------------------------------------------------- */
+
+    if (!(config->current_max_safe_a >=
+          config->current_min_safe_a)) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory config rejected: "
+            "maximum current %.3f A is below minimum %.3f A",
+            (double)config->current_max_safe_a,
+            (double)config->current_min_safe_a);
+
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    ESP_LOGI(
+        TAG,
+        "Factory configuration validated: "
+        "VwarnLow=%.3f "
+        "VwarnHigh=%.3f "
+        "Vcut=%.3f "
+        "Vcritical=%.3f "
+        "Vreset=%.3f "
+        "bypass=%" PRIu32 " ms "
+        "Imin=%.3f A "
+        "Imax=%.3f A",
+        (double)config->voltage_warn_low_v,
+        (double)config->voltage_warn_high_v,
+        (double)config->voltage_cutoff_v,
+        (double)config->voltage_critical_v,
+        (double)config->voltage_reset_v,
+        config->voltage_bypass_timeout_ms,
+        (double)config->current_min_safe_a,
+        (double)config->current_max_safe_a);
+
+    return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Factory configuration get                                                  */
+/* -------------------------------------------------------------------------- */
+
+esp_err_t eol_manager_get_factory_config(
+    eol_factory_config_t *config)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *config =
+        s_config.factory_config;
+
+    return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Factory configuration set                                                  */
+/* -------------------------------------------------------------------------- */
+
+esp_err_t eol_manager_set_factory_config(
+    const eol_factory_config_t *config)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err =
+        eol_manager_validate_factory_config(
+            config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGW(
+            TAG,
+            "Factory configuration rejected");
+
+        return err;
+    }
+
+    /*
+     * Important:
+     *
+     * No NVS write happens here.
+     *
+     * The caller/persistence layer is responsible for persistence.
+     */
+    s_config.factory_config =
+        *config;
+
+    ESP_LOGI(
+        TAG,
+        "Factory configuration accepted");
+
+    return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
 /* Stage 2 hardware tests                                                     */
 /* -------------------------------------------------------------------------- */
 
@@ -369,10 +775,6 @@ static esp_err_t run_rtc_test(void)
         return ESP_FAIL;
     }
 
-    /*
-     * A successful timestamp read verifies that the PCF8563
-     * is readable through the complete RTC manager path.
-     */
     uint32_t timestamp = 0U;
 
     err =
@@ -692,8 +1094,28 @@ esp_err_t eol_manager_init(
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (config->motor_max_current_a <= 0.0f) {
+    if (!isfinite(config->motor_max_current_a) ||
+        config->motor_max_current_a <= 0.0f) {
+
         return ESP_ERR_INVALID_ARG;
+    }
+
+    /*
+     * Validate the factory operating configuration before the
+     * manager becomes active.
+     */
+    esp_err_t err =
+        eol_manager_validate_factory_config(
+            &config->factory_config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL manager initialization rejected: "
+            "invalid factory configuration");
+
+        return err;
     }
 
     s_config =
@@ -710,6 +1132,22 @@ esp_err_t eol_manager_init(
     ESP_LOGI(
         TAG,
         "EOL manager initialized");
+
+    ESP_LOGI(
+        TAG,
+        "Factory config: "
+        "Imin=%.3f A Imax=%.3f A "
+        "Vlow=%.3f V Vhigh=%.3f V "
+        "Vcut=%.3f V Vcritical=%.3f V "
+        "Vreset=%.3f V bypass=%" PRIu32 " ms",
+        (double)s_config.factory_config.current_min_safe_a,
+        (double)s_config.factory_config.current_max_safe_a,
+        (double)s_config.factory_config.voltage_warn_low_v,
+        (double)s_config.factory_config.voltage_warn_high_v,
+        (double)s_config.factory_config.voltage_cutoff_v,
+        (double)s_config.factory_config.voltage_critical_v,
+        (double)s_config.factory_config.voltage_reset_v,
+        s_config.factory_config.voltage_bypass_timeout_ms);
 
     return ESP_OK;
 }
@@ -857,12 +1295,6 @@ esp_err_t eol_manager_run_test(
         case EOL_TEST_BATTERY:
             return run_battery_test();
 
-        /*
-         * These tests intentionally remain disconnected.
-         *
-         * They will be implemented only after their hardware
-         * ownership and safety conditions are established.
-         */
         case EOL_TEST_LIMIT_SWITCH:
 
             set_result(

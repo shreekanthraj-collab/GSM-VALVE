@@ -1,11 +1,12 @@
 #include "eol_persistence.h"
 
-#include <inttypes.h>
 #include <string.h>
 
 #include "esp_log.h"
+#include "nvs.h"
 
 #include "hal_nvs.h"
+#include "eol_manager.h"
 
 
 /* -------------------------------------------------------------------------- */
@@ -16,14 +17,21 @@ static const char *TAG = "EOL_PERSIST";
 
 
 /* -------------------------------------------------------------------------- */
-/* NVS keys                                                                   */
+/* NVS                                                                         */
 /* -------------------------------------------------------------------------- */
 
-#define EOL_NVS_KEY_RECORD        "record"
+#define EOL_PERSISTENCE_NAMESPACE       "eol"
+
+#define EOL_NVS_KEY_RECORD              "record"
+
+#define EOL_NVS_KEY_FACTORY_CONFIG     "factory_cfg"
+#define EOL_NVS_KEY_FACTORY_CONFIG_VER "factory_cfg_ver"
+
+#define EOL_FACTORY_CONFIG_VERSION     1U
 
 
 /* -------------------------------------------------------------------------- */
-/* Runtime context                                                            */
+/* Internal context                                                           */
 /* -------------------------------------------------------------------------- */
 
 typedef struct
@@ -32,39 +40,21 @@ typedef struct
 
     nvs_handle_t nvs_handle;
 
-    bool record_loaded;
-
     eol_persisted_record_t record;
 
-    uint32_t current_hardware_fingerprint;
-
-    uint32_t current_firmware_fingerprint;
-
-    char current_firmware_version[32];
-
     eol_persistence_validity_t validity;
+
+    uint32_t hardware_fingerprint;
+
+    uint32_t firmware_fingerprint;
+
+    char firmware_version[
+        EOL_PERSISTENCE_FIRMWARE_VERSION_MAX_LEN];
 
 } eol_persistence_context_t;
 
 
-static eol_persistence_context_t s_ctx =
-{
-    .initialized = false,
-
-    .nvs_handle = 0,
-
-    .record_loaded = false,
-
-    .record = {0},
-
-    .current_hardware_fingerprint = 0U,
-
-    .current_firmware_fingerprint = 0U,
-
-    .current_firmware_version = {0},
-
-    .validity = EOL_PERSISTENCE_NOT_TESTED
-};
+static eol_persistence_context_t s_ctx;
 
 
 /* -------------------------------------------------------------------------- */
@@ -78,36 +68,42 @@ static void reset_cached_record(void)
         0,
         sizeof(s_ctx.record));
 
-    s_ctx.record_loaded = false;
+    s_ctx.validity =
+        EOL_PERSISTENCE_NOT_TESTED;
 }
 
 
-/* -------------------------------------------------------------------------- */
-
-static bool record_is_structurally_valid(
+static bool valid_record(
     const eol_persisted_record_t *record)
 {
     if (record == NULL) {
         return false;
     }
 
-    if (record->magic != EOL_PERSISTENCE_MAGIC) {
+    /*
+     * A factory record is considered structurally valid when:
+     *
+     *   - it contains the expected record version
+     *   - it represents a completed EOL run
+     *   - its test counts are internally consistent
+     */
+    if (record->record_version !=
+        EOL_PERSISTENCE_RECORD_VERSION) {
         return false;
     }
 
-    if (record->schema_version !=
-        EOL_PERSISTENCE_SCHEMA_VERSION) {
-
+    if (record->overall_result !=
+        EOL_OVERALL_PASS &&
+        record->overall_result !=
+        EOL_OVERALL_FAIL) {
         return false;
     }
 
-    if (record->eol_compatibility_version == 0U) {
-        return false;
-    }
-
-    if (record->eol_compatibility_version >
-        EOL_COMPATIBILITY_VERSION) {
-
+    if (record->tests_passed +
+        record->tests_failed +
+        record->tests_skipped +
+        record->tests_not_run >
+        EOL_TEST_COUNT) {
         return false;
     }
 
@@ -115,69 +111,35 @@ static bool record_is_structurally_valid(
 }
 
 
-/* -------------------------------------------------------------------------- */
-
-static bool current_identity_matches_record(void)
+static bool identity_matches(
+    const eol_persisted_record_t *record)
 {
-    if (!s_ctx.record_loaded) {
+    if (record == NULL) {
         return false;
     }
 
-
-    if (s_ctx.record.hardware_fingerprint !=
-        s_ctx.current_hardware_fingerprint) {
-
-        ESP_LOGW(
-            TAG,
-            "Hardware fingerprint mismatch: "
-            "stored=0x%08" PRIX32
-            " current=0x%08" PRIX32,
-            s_ctx.record.hardware_fingerprint,
-            s_ctx.current_hardware_fingerprint);
-
+    if (record->hardware_fingerprint !=
+        s_ctx.hardware_fingerprint) {
         return false;
     }
 
-
-    if (s_ctx.record.firmware_fingerprint !=
-        s_ctx.current_firmware_fingerprint) {
-
-        ESP_LOGW(
-            TAG,
-            "Firmware fingerprint mismatch: "
-            "stored=0x%08" PRIX32
-            " current=0x%08" PRIX32,
-            s_ctx.record.firmware_fingerprint,
-            s_ctx.current_firmware_fingerprint);
-
+    if (record->firmware_fingerprint !=
+        s_ctx.firmware_fingerprint) {
         return false;
     }
 
-
-    if (s_ctx.record.eol_compatibility_version !=
-        EOL_COMPATIBILITY_VERSION) {
-
-        ESP_LOGW(
-            TAG,
-            "EOL compatibility mismatch: "
-            "stored=%" PRIu32
-            " current=%u",
-            s_ctx.record.eol_compatibility_version,
-            EOL_COMPATIBILITY_VERSION);
-
+    if (record->compatibility_version !=
+        EOL_PERSISTENCE_COMPATIBILITY_VERSION) {
         return false;
     }
-
 
     return true;
 }
 
-
-/* -------------------------------------------------------------------------- */
 
 static void update_validity(void)
 {
-    if (!s_ctx.record_loaded) {
+    if (!valid_record(&s_ctx.record)) {
 
         s_ctx.validity =
             EOL_PERSISTENCE_NOT_TESTED;
@@ -185,33 +147,8 @@ static void update_validity(void)
         return;
     }
 
-
-    if (!record_is_structurally_valid(
-            &s_ctx.record)) {
-
-        /*
-         * Preserve the old NVS data.
-         *
-         * A malformed or incompatible record is never
-         * automatically erased.
-         */
-        s_ctx.validity =
-            EOL_PERSISTENCE_REVERIFICATION_REQUIRED;
-
-        return;
-    }
-
-
-    if (!s_ctx.record.completed) {
-
-        s_ctx.validity =
-            EOL_PERSISTENCE_REVERIFICATION_REQUIRED;
-
-        return;
-    }
-
-
-    if (!s_ctx.record.passed) {
+    if (s_ctx.record.overall_result !=
+        EOL_OVERALL_PASS) {
 
         s_ctx.validity =
             EOL_PERSISTENCE_FAILED;
@@ -219,8 +156,7 @@ static void update_validity(void)
         return;
     }
 
-
-    if (!current_identity_matches_record()) {
+    if (!identity_matches(&s_ctx.record)) {
 
         s_ctx.validity =
             EOL_PERSISTENCE_REVERIFICATION_REQUIRED;
@@ -228,57 +164,77 @@ static void update_validity(void)
         return;
     }
 
-
-       s_ctx.validity =
+    s_ctx.validity =
         EOL_PERSISTENCE_VALID;
 }
 
 
 /* -------------------------------------------------------------------------- */
+/* Record creation                                                            */
+/* -------------------------------------------------------------------------- */
 
-static void copy_test_results(
+static void populate_record_from_status(
     eol_persisted_record_t *record,
     const eol_status_t *status)
 {
-    if (record == NULL || status == NULL) {
+    if (record == NULL ||
+        status == NULL) {
         return;
     }
 
+    memset(
+        record,
+        0,
+        sizeof(*record));
 
-    for (size_t i = 0U;
-         i < EOL_TEST_COUNT;
-         ++i) {
+    record->record_version =
+        EOL_PERSISTENCE_RECORD_VERSION;
 
-        record->test_result[i] =
-            (uint8_t)status->tests[i].result;
-    }
+    record->compatibility_version =
+        EOL_PERSISTENCE_COMPATIBILITY_VERSION;
+
+    record->hardware_fingerprint =
+        s_ctx.hardware_fingerprint;
+
+    record->firmware_fingerprint =
+        s_ctx.firmware_fingerprint;
+
+    strncpy(
+        record->firmware_version,
+        s_ctx.firmware_version,
+        sizeof(record->firmware_version) - 1U);
+
+    record->firmware_version[
+        sizeof(record->firmware_version) - 1U] =
+        '\0';
+
+    record->overall_result =
+        status->overall_result;
+
+    record->started_ms =
+        status->started_ms;
+
+    record->completed_ms =
+        status->completed_ms;
+
+    record->tests_passed =
+        status->tests_passed;
+
+    record->tests_failed =
+        status->tests_failed;
+
+    record->tests_skipped =
+        status->tests_skipped;
+
+    record->tests_not_run =
+        status->tests_not_run;
 
 
     /*
-     * Reset diagnostic values before copying.
-     */
-    record->encoder_angle =
-        0U;
-
-    record->battery_voltage_v =
-        0.0f;
-
-    record->ina226_bus_voltage_v =
-        0.0f;
-
-    record->ina226_current_a =
-        0.0f;
-
-    record->ina226_power_w =
-        0.0f;
-
-
-    /*
-     * The current EOL result interface exposes one numeric
-     * value per test.
-     *
      * Encoder:
-     *     value is treated as the reported angle.
+     *
+     * The EOL result numeric value is treated as
+     * the reported encoder angle.
      */
     if (status->tests[EOL_TEST_ENCODER].result !=
         EOL_RESULT_NOT_RUN) {
@@ -297,7 +253,9 @@ static void copy_test_results(
 
     /*
      * Battery:
-     *     value is treated as battery voltage.
+     *
+     * The EOL result numeric value is treated
+     * as battery voltage.
      */
     if (status->tests[EOL_TEST_BATTERY].result !=
         EOL_RESULT_NOT_RUN) {
@@ -310,11 +268,13 @@ static void copy_test_results(
     /*
      * INA226:
      *
-     * The current EOL result structure only provides one
-     * numeric value for each test. Therefore we store the
-     * reported INA226 value as bus voltage for now.
+     * Current EOL result structure provides only
+     * one numeric value for this test.
      *
-     * We do NOT invent current or power values.
+     * Preserve existing behavior and store it
+     * as bus voltage.
+     *
+     * Do not invent current or power values.
      */
     if (status->tests[EOL_TEST_INA226].result !=
         EOL_RESULT_NOT_RUN) {
@@ -325,6 +285,8 @@ static void copy_test_results(
 }
 
 
+/* -------------------------------------------------------------------------- */
+/* Record write                                                               */
 /* -------------------------------------------------------------------------- */
 
 static esp_err_t write_record(
@@ -337,7 +299,6 @@ static esp_err_t write_record(
     if (record == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-
 
     esp_err_t err =
         hal_nvs_set_blob(
@@ -356,7 +317,6 @@ static esp_err_t write_record(
         return err;
     }
 
-
     err =
         hal_nvs_commit(
             s_ctx.nvs_handle);
@@ -371,8 +331,350 @@ static esp_err_t write_record(
         return err;
     }
 
+    return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Factory configuration persistence                                          */
+/* -------------------------------------------------------------------------- */
+
+esp_err_t eol_persistence_save_factory_config(
+    const eol_factory_config_t *config)
+{
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    /*
+     * The EOL manager owns the safety validation.
+     *
+     * Persistence must never allow an invalid configuration
+     * to reach NVS.
+     */
+    esp_err_t err =
+        eol_manager_validate_factory_config(config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory configuration rejected: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    /*
+     * Write the configuration blob first.
+     */
+    err =
+        hal_nvs_set_blob(
+            s_ctx.nvs_handle,
+            EOL_NVS_KEY_FACTORY_CONFIG,
+            config,
+            sizeof(*config));
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Failed to write factory configuration: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    /*
+     * Write the configuration schema/version.
+     */
+    err =
+        hal_nvs_set_u32(
+            s_ctx.nvs_handle,
+            EOL_NVS_KEY_FACTORY_CONFIG_VER,
+            EOL_FACTORY_CONFIG_VERSION);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Failed to write factory configuration version: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    /*
+     * Commit both values together.
+     */
+    err =
+        hal_nvs_commit(
+            s_ctx.nvs_handle);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Failed to commit factory configuration: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+
+    ESP_LOGI(
+        TAG,
+        "Factory configuration saved");
 
     return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
+
+esp_err_t eol_persistence_load_factory_config(
+    eol_factory_config_t *config)
+{
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (config == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+
+    memset(
+        config,
+        0,
+        sizeof(*config));
+
+
+    uint32_t version = 0U;
+
+    esp_err_t err =
+        hal_nvs_get_u32(
+            s_ctx.nvs_handle,
+            EOL_NVS_KEY_FACTORY_CONFIG_VER,
+            &version);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+
+    /*
+     * Reject configuration formats that this firmware
+     * does not understand.
+     */
+    if (version != EOL_FACTORY_CONFIG_VERSION) {
+
+        ESP_LOGW(
+            TAG,
+            "Unsupported factory configuration version: %lu",
+            (unsigned long)version);
+
+        return ESP_ERR_INVALID_VERSION;
+    }
+
+
+    size_t size =
+        sizeof(*config);
+
+    err =
+        hal_nvs_get_blob(
+            s_ctx.nvs_handle,
+            EOL_NVS_KEY_FACTORY_CONFIG,
+            config,
+            &size);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+
+        memset(
+            config,
+            0,
+            sizeof(*config));
+
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (err != ESP_OK) {
+
+        memset(
+            config,
+            0,
+            sizeof(*config));
+
+        return err;
+    }
+
+
+    /*
+     * Protect against a blob created by another
+     * structure/version.
+     */
+    if (size != sizeof(*config)) {
+
+        ESP_LOGE(
+            TAG,
+            "Factory configuration size mismatch: "
+            "stored=%u expected=%u",
+            (unsigned)size,
+            (unsigned)sizeof(*config));
+
+        memset(
+            config,
+            0,
+            sizeof(*config));
+
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+
+    /*
+     * Always validate data after loading from NVS.
+     *
+     * This protects against:
+     *
+     *   - corrupted NVS data
+     *   - obsolete configuration
+     *   - invalid values
+     *   - values outside firmware safety limits
+     */
+    err =
+        eol_manager_validate_factory_config(config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Stored factory configuration failed validation");
+
+        memset(
+            config,
+            0,
+            sizeof(*config));
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+
+    return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
+
+esp_err_t eol_persistence_has_factory_config(
+    bool *present)
+{
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (present == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *present = false;
+
+
+    uint32_t version = 0U;
+
+    esp_err_t err =
+        hal_nvs_get_u32(
+            s_ctx.nvs_handle,
+            EOL_NVS_KEY_FACTORY_CONFIG_VER,
+            &version);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    }
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+
+    if (version != EOL_FACTORY_CONFIG_VERSION) {
+        return ESP_OK;
+    }
+
+
+    size_t size = 0U;
+
+    err =
+        hal_nvs_get_blob(
+            s_ctx.nvs_handle,
+            EOL_NVS_KEY_FACTORY_CONFIG,
+            NULL,
+            &size);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    }
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+
+    if (size == sizeof(eol_factory_config_t)) {
+        *present = true;
+    }
+
+
+    return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
+
+esp_err_t eol_persistence_clear_factory_config(void)
+{
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+
+    esp_err_t err =
+        hal_nvs_erase_key(
+            s_ctx.nvs_handle,
+            EOL_NVS_KEY_FACTORY_CONFIG);
+
+    if (err != ESP_OK &&
+        err != ESP_ERR_NVS_NOT_FOUND) {
+
+        return err;
+    }
+
+
+    err =
+        hal_nvs_erase_key(
+            s_ctx.nvs_handle,
+            EOL_NVS_KEY_FACTORY_CONFIG_VER);
+
+    if (err != ESP_OK &&
+        err != ESP_ERR_NVS_NOT_FOUND) {
+
+        return err;
+    }
+
+
+    return hal_nvs_commit(
+        s_ctx.nvs_handle);
 }
 
 
@@ -385,6 +687,14 @@ esp_err_t eol_persistence_init(void)
     if (s_ctx.initialized) {
         return ESP_OK;
     }
+
+
+    memset(
+        &s_ctx,
+        0,
+        sizeof(s_ctx));
+
+    s_ctx.nvs_handle = 0;
 
 
     esp_err_t err =
@@ -413,7 +723,7 @@ esp_err_t eol_persistence_init(void)
     /*
      * Load the existing factory EOL record.
      *
-     * No record is a normal condition for a new device.
+     * No record is normal on a new device.
      */
     size_t size =
         sizeof(s_ctx.record);
@@ -446,46 +756,37 @@ esp_err_t eol_persistence_init(void)
             "Failed to read EOL record: %s",
             esp_err_to_name(err));
 
-        hal_nvs_close(
-            s_ctx.nvs_handle);
-
-        s_ctx.nvs_handle =
-            0;
-
-        s_ctx.initialized =
-            false;
-
         reset_cached_record();
 
         return err;
     }
 
 
-    /*
-     * Protect against an older/different record layout.
-     *
-     * Do not erase it.
-     */
     if (size != sizeof(s_ctx.record)) {
 
-        ESP_LOGW(
+        ESP_LOGE(
             TAG,
-            "EOL record size mismatch: "
-            "stored=%u expected=%u",
+            "EOL record size mismatch: stored=%u expected=%u",
             (unsigned)size,
             (unsigned)sizeof(s_ctx.record));
 
         reset_cached_record();
 
-        s_ctx.validity =
-            EOL_PERSISTENCE_REVERIFICATION_REQUIRED;
-
-        return ESP_OK;
+        return ESP_ERR_INVALID_SIZE;
     }
 
 
-    s_ctx.record_loaded =
-        true;
+    if (!valid_record(&s_ctx.record)) {
+
+        ESP_LOGW(
+            TAG,
+            "Stored EOL record is structurally invalid");
+
+        s_ctx.validity =
+            EOL_PERSISTENCE_FAILED;
+
+        return ESP_OK;
+    }
 
 
     update_validity();
@@ -493,19 +794,14 @@ esp_err_t eol_persistence_init(void)
 
     ESP_LOGI(
         TAG,
-        "Factory EOL record loaded: "
-        "completed=%s "
-        "passed=%s "
-        "validity=%d",
-        s_ctx.record.completed ? "yes" : "no",
-        s_ctx.record.passed ? "yes" : "no",
-        (int)s_ctx.validity);
-
+        "Factory EOL record loaded");
 
     return ESP_OK;
 }
 
 
+/* -------------------------------------------------------------------------- */
+/* Deinitialization                                                           */
 /* -------------------------------------------------------------------------- */
 
 esp_err_t eol_persistence_deinit(void)
@@ -519,31 +815,10 @@ esp_err_t eol_persistence_deinit(void)
         s_ctx.nvs_handle);
 
 
-    s_ctx.nvs_handle =
-        0;
-
-    s_ctx.initialized =
-        false;
-
-
-    reset_cached_record();
-
-
-    s_ctx.current_hardware_fingerprint =
-        0U;
-
-    s_ctx.current_firmware_fingerprint =
-        0U;
-
-
     memset(
-        s_ctx.current_firmware_version,
+        &s_ctx,
         0,
-        sizeof(s_ctx.current_firmware_version));
-
-
-    s_ctx.validity =
-        EOL_PERSISTENCE_NOT_TESTED;
+        sizeof(s_ctx));
 
 
     return ESP_OK;
@@ -557,7 +832,12 @@ esp_err_t eol_persistence_deinit(void)
 esp_err_t eol_persistence_set_hardware_fingerprint(
     uint32_t fingerprint)
 {
-    s_ctx.current_hardware_fingerprint =
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+
+    s_ctx.hardware_fingerprint =
         fingerprint;
 
     update_validity();
@@ -571,7 +851,12 @@ esp_err_t eol_persistence_set_hardware_fingerprint(
 esp_err_t eol_persistence_set_firmware_fingerprint(
     uint32_t fingerprint)
 {
-    s_ctx.current_firmware_fingerprint =
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+
+    s_ctx.firmware_fingerprint =
         fingerprint;
 
     update_validity();
@@ -585,22 +870,26 @@ esp_err_t eol_persistence_set_firmware_fingerprint(
 esp_err_t eol_persistence_set_firmware_version(
     const char *version)
 {
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (version == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
 
-    memset(
-        s_ctx.current_firmware_version,
-        0,
-        sizeof(s_ctx.current_firmware_version));
-
-
     strncpy(
-        s_ctx.current_firmware_version,
+        s_ctx.firmware_version,
         version,
-        sizeof(s_ctx.current_firmware_version) - 1U);
+        sizeof(s_ctx.firmware_version) - 1U);
 
+    s_ctx.firmware_version[
+        sizeof(s_ctx.firmware_version) - 1U] =
+        '\0';
+
+
+    update_validity();
 
     return ESP_OK;
 }
@@ -610,7 +899,7 @@ esp_err_t eol_persistence_set_firmware_version(
 
 uint32_t eol_persistence_get_hardware_fingerprint(void)
 {
-    return s_ctx.current_hardware_fingerprint;
+    return s_ctx.hardware_fingerprint;
 }
 
 
@@ -618,7 +907,29 @@ uint32_t eol_persistence_get_hardware_fingerprint(void)
 
 uint32_t eol_persistence_get_firmware_fingerprint(void)
 {
-    return s_ctx.current_firmware_fingerprint;
+    return s_ctx.firmware_fingerprint;
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Current identity validation                                                */
+/* -------------------------------------------------------------------------- */
+
+esp_err_t eol_persistence_validate_current_identity(void)
+{
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!valid_record(&s_ctx.record)) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (!identity_matches(&s_ctx.record)) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    return ESP_OK;
 }
 
 
@@ -629,26 +940,24 @@ uint32_t eol_persistence_get_firmware_fingerprint(void)
 esp_err_t eol_persistence_load(
     eol_persisted_record_t *record)
 {
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (record == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
 
-    if (!s_ctx.initialized) {
-        return ESP_ERR_INVALID_STATE;
-    }
+    if (s_ctx.validity ==
+        EOL_PERSISTENCE_NOT_TESTED) {
 
-
-    if (!s_ctx.record_loaded) {
         return ESP_ERR_NOT_FOUND;
     }
 
 
-    memcpy(
-        record,
-        &s_ctx.record,
-        sizeof(*record));
-
+    *record =
+        s_ctx.record;
 
     return ESP_OK;
 }
@@ -659,13 +968,12 @@ esp_err_t eol_persistence_load(
 esp_err_t eol_persistence_save_result(
     const eol_status_t *status)
 {
-    if (status == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-
     if (!s_ctx.initialized) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
     }
 
 
@@ -674,132 +982,60 @@ esp_err_t eol_persistence_save_result(
 
         ESP_LOGE(
             TAG,
-            "Cannot save EOL result: "
-            "state=%d is not COMPLETE",
-            (int)status->state);
+            "Cannot save incomplete EOL result");
 
         return ESP_ERR_INVALID_STATE;
     }
 
 
-    if (status->overall_result ==
-        EOL_OVERALL_NOT_RUN) {
+    if (status->overall_result !=
+        EOL_OVERALL_PASS &&
+        status->overall_result !=
+        EOL_OVERALL_FAIL) {
 
-        return ESP_ERR_INVALID_STATE;
+        ESP_LOGE(
+            TAG,
+            "Invalid EOL overall result");
+
+        return ESP_ERR_INVALID_ARG;
     }
 
 
-    /*
-     * Construct the new record completely in RAM first.
-     *
-     * The previous NVS record is untouched until the
-     * complete new record is successfully committed.
-     */
-    eol_persisted_record_t new_record;
+    eol_persisted_record_t record;
 
-    memset(
-        &new_record,
-        0,
-        sizeof(new_record));
-
-
-    new_record.magic =
-        EOL_PERSISTENCE_MAGIC;
-
-
-    new_record.schema_version =
-        EOL_PERSISTENCE_SCHEMA_VERSION;
-
-
-    new_record.compatibility_version =
-        (uint16_t)EOL_COMPATIBILITY_VERSION;
-
-
-    new_record.completed =
-        true;
-
-
-    new_record.passed =
-        status->overall_result ==
-        EOL_OVERALL_PASS;
-
-
-    new_record.completed_timestamp =
-        status->completed_ms;
-
-
-    new_record.tests_passed =
-        status->tests_passed;
-
-
-    new_record.tests_failed =
-        status->tests_failed;
-
-
-    new_record.tests_skipped =
-        status->tests_skipped;
-
-
-    new_record.tests_not_run =
-        status->tests_not_run;
-
-
-    new_record.hardware_fingerprint =
-        s_ctx.current_hardware_fingerprint;
-
-
-    new_record.firmware_fingerprint =
-        s_ctx.current_firmware_fingerprint;
-
-
-    new_record.eol_compatibility_version =
-        EOL_COMPATIBILITY_VERSION;
-
-
-    copy_test_results(
-        &new_record,
+    populate_record_from_status(
+        &record,
         status);
 
 
-    strncpy(
-        new_record.firmware_version,
-        s_ctx.current_firmware_version,
-        sizeof(new_record.firmware_version) - 1U);
+    if (!valid_record(&record)) {
+
+        ESP_LOGE(
+            TAG,
+            "Generated EOL record is invalid");
+
+        return ESP_ERR_INVALID_ARG;
+    }
 
 
     /*
-     * Write and commit the complete new factory record.
+     * Write first.
+     *
+     * Cached state is changed only after NVS write
+     * and commit succeed.
      */
     esp_err_t err =
-        write_record(
-            &new_record);
+        write_record(&record);
 
     if (err != ESP_OK) {
         return err;
     }
 
 
-    /*
-     * Update the cached record only after the NVS
-     * transaction has completed successfully.
-     */
-    memcpy(
-        &s_ctx.record,
-        &new_record,
-        sizeof(new_record));
-
-
-    s_ctx.record_loaded =
-        true;
-
+    s_ctx.record =
+        record;
 
     update_validity();
-
-
-    ESP_LOGI(
-        TAG,
-        "Factory EOL result saved: %s",
-        new_record.passed ? "PASS" : "FAIL");
 
 
     return ESP_OK;
@@ -820,25 +1056,12 @@ esp_err_t eol_persistence_clear(void)
             s_ctx.nvs_handle,
             EOL_NVS_KEY_RECORD);
 
-
     if (err == ESP_ERR_NVS_NOT_FOUND) {
-
-        reset_cached_record();
-
-        s_ctx.validity =
-            EOL_PERSISTENCE_NOT_TESTED;
-
-        return ESP_OK;
+        err = ESP_OK;
     }
 
 
     if (err != ESP_OK) {
-
-        ESP_LOGE(
-            TAG,
-            "Failed to erase EOL record: %s",
-            esp_err_to_name(err));
-
         return err;
     }
 
@@ -847,28 +1070,12 @@ esp_err_t eol_persistence_clear(void)
         hal_nvs_commit(
             s_ctx.nvs_handle);
 
-
     if (err != ESP_OK) {
-
-        ESP_LOGE(
-            TAG,
-            "Failed to commit EOL record erase: %s",
-            esp_err_to_name(err));
-
         return err;
     }
 
 
     reset_cached_record();
-
-
-    s_ctx.validity =
-        EOL_PERSISTENCE_NOT_TESTED;
-
-
-    ESP_LOGI(
-        TAG,
-        "Factory EOL record cleared");
 
 
     return ESP_OK;
@@ -882,8 +1089,6 @@ esp_err_t eol_persistence_clear(void)
 eol_persistence_validity_t
 eol_persistence_get_validity(void)
 {
-    update_validity();
-
     return s_ctx.validity;
 }
 
@@ -892,9 +1097,8 @@ eol_persistence_get_validity(void)
 
 bool eol_persistence_is_valid(void)
 {
-    return
-        eol_persistence_get_validity() ==
-        EOL_PERSISTENCE_VALID;
+    return s_ctx.validity ==
+           EOL_PERSISTENCE_VALID;
 }
 
 
@@ -902,9 +1106,8 @@ bool eol_persistence_is_valid(void)
 
 bool eol_persistence_is_reverification_required(void)
 {
-    return
-        eol_persistence_get_validity() ==
-        EOL_PERSISTENCE_REVERIFICATION_REQUIRED;
+    return s_ctx.validity ==
+           EOL_PERSISTENCE_REVERIFICATION_REQUIRED;
 }
 
 
@@ -912,9 +1115,8 @@ bool eol_persistence_is_reverification_required(void)
 
 bool eol_persistence_is_not_tested(void)
 {
-    return
-        eol_persistence_get_validity() ==
-        EOL_PERSISTENCE_NOT_TESTED;
+    return s_ctx.validity ==
+           EOL_PERSISTENCE_NOT_TESTED;
 }
 
 
@@ -922,9 +1124,8 @@ bool eol_persistence_is_not_tested(void)
 
 bool eol_persistence_is_failed(void)
 {
-    return
-        eol_persistence_get_validity() ==
-        EOL_PERSISTENCE_FAILED;
+    return s_ctx.validity ==
+           EOL_PERSISTENCE_FAILED;
 }
 
 
@@ -943,9 +1144,25 @@ bool eol_persistence_is_initialized(void)
 esp_err_t eol_persistence_get_record(
     eol_persisted_record_t *record)
 {
-    return
-        eol_persistence_load(
-            record);
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (record == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_ctx.validity ==
+        EOL_PERSISTENCE_NOT_TESTED) {
+
+        return ESP_ERR_NOT_FOUND;
+    }
+
+
+    *record =
+        s_ctx.record;
+
+    return ESP_OK;
 }
 
 
@@ -954,19 +1171,23 @@ esp_err_t eol_persistence_get_record(
 esp_err_t eol_persistence_get_stored_hardware_fingerprint(
     uint32_t *fingerprint)
 {
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (fingerprint == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (s_ctx.validity ==
+        EOL_PERSISTENCE_NOT_TESTED) {
 
-    if (!s_ctx.record_loaded) {
         return ESP_ERR_NOT_FOUND;
     }
 
 
     *fingerprint =
         s_ctx.record.hardware_fingerprint;
-
 
     return ESP_OK;
 }
@@ -977,12 +1198,17 @@ esp_err_t eol_persistence_get_stored_hardware_fingerprint(
 esp_err_t eol_persistence_get_stored_firmware_fingerprint(
     uint32_t *fingerprint)
 {
+    if (!s_ctx.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (fingerprint == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (s_ctx.validity ==
+        EOL_PERSISTENCE_NOT_TESTED) {
 
-    if (!s_ctx.record_loaded) {
         return ESP_ERR_NOT_FOUND;
     }
 
@@ -990,135 +1216,35 @@ esp_err_t eol_persistence_get_stored_firmware_fingerprint(
     *fingerprint =
         s_ctx.record.firmware_fingerprint;
 
-
     return ESP_OK;
 }
 
 
 /* -------------------------------------------------------------------------- */
 
-esp_err_t eol_persistence_get_stored_compatibility_version(
-    uint32_t *version)
+uint32_t eol_persistence_get_stored_compatibility_version(void)
 {
-    if (version == NULL) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-
-    if (!s_ctx.record_loaded) {
-        return ESP_ERR_NOT_FOUND;
-    }
-
-
-    *version =
-        s_ctx.record.eol_compatibility_version;
-
-
-    return ESP_OK;
-}
-
-
-/* -------------------------------------------------------------------------- */
-/* Re-verification                                                            */
-/* -------------------------------------------------------------------------- */
-
-esp_err_t eol_persistence_validate_current_identity(void)
-{
-    if (!s_ctx.initialized) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-
-    update_validity();
-
-
-    return ESP_OK;
-}
-
-
-/* -------------------------------------------------------------------------- */
-
-esp_err_t eol_persistence_require_reverification(void)
-{
-    if (!s_ctx.initialized) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-
-    /*
-     * Deliberately do not alter or erase the NVS record.
-     *
-     * The previous factory result remains available for
-     * manufacturing traceability.
-     */
-    if (s_ctx.record_loaded) {
-
-        s_ctx.validity =
-            EOL_PERSISTENCE_REVERIFICATION_REQUIRED;
-
-    }
-    else {
-
-        s_ctx.validity =
-            EOL_PERSISTENCE_NOT_TESTED;
-    }
-
-
-    return ESP_OK;
-}
-
-
-/* -------------------------------------------------------------------------- */
-/* Fingerprint                                                                */
-/* -------------------------------------------------------------------------- */
-
-uint32_t eol_persistence_calculate_fingerprint(
-    const void *data,
-    uint32_t length)
-{
-    /*
-     * FNV-1a 32-bit.
-     *
-     * Deterministic and lightweight.
-     *
-     * This is an identity/change detector, not a security
-     * or cryptographic authentication mechanism.
-     */
-    const uint8_t *bytes =
-        (const uint8_t *)data;
-
-
-    uint32_t hash =
-        2166136261UL;
-
-
-    if (bytes == NULL &&
-        length != 0U) {
+    if (s_ctx.validity ==
+        EOL_PERSISTENCE_NOT_TESTED) {
 
         return 0U;
     }
 
 
-    for (uint32_t i = 0U;
-         i < length;
-         ++i) {
-
-        hash ^=
-            bytes[i];
-
-        hash *=
-            16777619UL;
-    }
-
-
-    return hash;
+    return s_ctx.record.compatibility_version;
 }
 
 
 /* -------------------------------------------------------------------------- */
 
-uint32_t eol_persistence_get_compatibility_version(void)
+const char *eol_persistence_get_stored_firmware_version(void)
 {
-    return
-        EOL_COMPATIBILITY_VERSION;
+    if (s_ctx.validity ==
+        EOL_PERSISTENCE_NOT_TESTED) {
+
+        return NULL;
+    }
+
+
+    return s_ctx.record.firmware_version;
 }

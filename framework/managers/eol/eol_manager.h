@@ -94,6 +94,133 @@ typedef enum
 
 
 /* -------------------------------------------------------------------------- */
+/* EOL factory operating configuration                                        */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * These values represent the production operating configuration
+ * established during EOL/factory commissioning.
+ *
+ * They are NOT the absolute firmware safety limits.
+ *
+ * EOL values are validated against the firmware absolute limits
+ * before being accepted as production configuration.
+ *
+ * After EOL, AWS may request changes to these values.
+ *
+ * The ESP32 must validate every AWS value before accepting it.
+ */
+typedef struct
+{
+    /* ---------------------------------------------------------------------- */
+    /* Battery / voltage configuration                                        */
+    /* ---------------------------------------------------------------------- */
+
+    /*
+     * Warning low battery voltage.
+     */
+    float voltage_warn_low_v;
+
+    /*
+     * Warning high battery voltage.
+     */
+    float voltage_warn_high_v;
+
+    /*
+     * Battery voltage at which motor operation requires bypass handling.
+     */
+    float voltage_cutoff_v;
+
+    /*
+     * Critical battery voltage.
+     */
+    float voltage_critical_v;
+
+    /*
+     * Voltage required before normal operation may resume.
+     */
+    float voltage_reset_v;
+
+    /*
+     * Maximum time allowed for the battery bypass acknowledgement.
+     */
+    uint32_t voltage_bypass_timeout_ms;
+
+
+    /* ---------------------------------------------------------------------- */
+    /* Motor / over-current configuration                                     */
+    /* ---------------------------------------------------------------------- */
+
+    /*
+     * Minimum safe operating current.
+     *
+     * This is the starting current for the OC protection/escalation
+     * algorithm.
+     */
+    float current_min_safe_a;
+
+    /*
+     * Maximum safe operating current.
+     *
+     * The OC escalation algorithm must NEVER exceed this value.
+     */
+    float current_max_safe_a;
+
+} eol_factory_config_t;
+
+
+/* -------------------------------------------------------------------------- */
+/* Firmware absolute safety limits                                            */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * These limits are compiled into firmware.
+ *
+ * They represent the absolute safety boundary.
+ *
+ * Neither EOL nor AWS configuration may exceed these limits.
+ *
+ * Example:
+ *
+ *     firmware max current = 5.0 A
+ *
+ *     EOL 4.0 A -> ACCEPT
+ *     AWS 4.5 A -> ACCEPT
+ *     AWS 5.0 A -> ACCEPT
+ *     AWS 5.5 A -> REJECT
+ *
+ * The ESP32 performs the validation.
+ */
+
+
+/* Voltage absolute limits */
+
+#define EOL_ABS_VOLTAGE_WARN_LOW_MIN_V       0.0f
+#define EOL_ABS_VOLTAGE_WARN_LOW_MAX_V       20.0f
+
+#define EOL_ABS_VOLTAGE_WARN_HIGH_MIN_V      0.0f
+#define EOL_ABS_VOLTAGE_WARN_HIGH_MAX_V      20.0f
+
+#define EOL_ABS_VOLTAGE_CUTOFF_MIN_V         0.0f
+#define EOL_ABS_VOLTAGE_CUTOFF_MAX_V         20.0f
+
+#define EOL_ABS_VOLTAGE_CRITICAL_MIN_V       0.0f
+#define EOL_ABS_VOLTAGE_CRITICAL_MAX_V       20.0f
+
+#define EOL_ABS_VOLTAGE_RESET_MIN_V          0.0f
+#define EOL_ABS_VOLTAGE_RESET_MAX_V          20.0f
+
+
+/* Current absolute limits */
+
+#define EOL_ABS_CURRENT_MIN_SAFE_MIN_A       0.10f
+#define EOL_ABS_CURRENT_MIN_SAFE_MAX_A       5.00f
+
+#define EOL_ABS_CURRENT_MAX_SAFE_MIN_A       0.10f
+#define EOL_ABS_CURRENT_MAX_SAFE_MAX_A       5.00f
+
+
+/* -------------------------------------------------------------------------- */
 /* Individual test information                                                */
 /* -------------------------------------------------------------------------- */
 
@@ -106,8 +233,7 @@ typedef struct
     /*
      * Short diagnostic text.
      *
-     * This is intended for serial logging and later
-     * local EOL reporting.
+     * Intended for serial logging and local EOL reporting.
      */
     char message[96];
 
@@ -154,7 +280,7 @@ typedef struct
 
 
 /* -------------------------------------------------------------------------- */
-/* EOL configuration                                                          */
+/* EOL manager configuration                                                  */
 /* -------------------------------------------------------------------------- */
 
 typedef struct
@@ -162,7 +288,7 @@ typedef struct
     /*
      * Maximum time allowed for a complete EOL run.
      *
-     * This is a safety limit for the EOL state machine.
+     * Safety limit for the EOL state machine.
      */
     uint32_t overall_timeout_ms;
 
@@ -185,11 +311,67 @@ typedef struct
     float motor_min_turns;
 
     /*
-     * Maximum allowed motor current during EOL motor testing.
+     * Maximum current permitted during the EOL motor test itself.
+     *
+     * This is a test safety limit and is separate from
+     * current_max_safe_a in eol_factory_config_t.
      */
     float motor_max_current_a;
 
+    /*
+     * Factory production configuration.
+     *
+     * This is the configuration established by EOL and subsequently
+     * stored in NVS.
+     */
+    eol_factory_config_t factory_config;
+
 } eol_manager_config_t;
+
+
+/* -------------------------------------------------------------------------- */
+/* Factory configuration validation                                           */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Validate a factory configuration against the firmware absolute
+ * safety boundaries.
+ *
+ * No NVS write is performed here.
+ *
+ * Returns:
+ *
+ *     ESP_OK
+ *         Configuration is safe and structurally valid.
+ *
+ *     ESP_ERR_INVALID_ARG
+ *         Configuration exceeds an absolute firmware limit or
+ *         contains an invalid relationship.
+ */
+esp_err_t eol_manager_validate_factory_config(
+    const eol_factory_config_t *config);
+
+
+/*
+ * Get the currently configured factory/EOL values.
+ */
+esp_err_t eol_manager_get_factory_config(
+    eol_factory_config_t *config);
+
+
+/*
+ * Set the factory/EOL configuration in the EOL manager.
+ *
+ * The configuration is validated against the firmware absolute
+ * limits before being accepted.
+ *
+ * This function does NOT directly write NVS.
+ *
+ * NVS persistence remains the responsibility of the
+ * EOL persistence manager.
+ */
+esp_err_t eol_manager_set_factory_config(
+    const eol_factory_config_t *config);
 
 
 /* -------------------------------------------------------------------------- */
@@ -236,7 +418,7 @@ bool eol_manager_is_requested(void);
  *
  *   - motor movement is NOT started unless the motor tests
  *     explicitly reach their execution stage.
- *   - the caller must place the actuator in a safe mechanical
+ *   - caller must place the actuator in a safe mechanical
  *     test condition before allowing motor tests.
  */
 esp_err_t eol_manager_start(void);
@@ -253,7 +435,7 @@ esp_err_t eol_manager_abort(void);
 /*
  * Execute one EOL state-machine step.
  *
- * This is intentionally non-blocking at the manager level.
+ * Intentionally non-blocking at manager level.
  */
 esp_err_t eol_manager_process(
     uint32_t now_ms);
@@ -306,7 +488,7 @@ bool eol_manager_is_complete(void);
 /*
  * Force EOL into a safe state.
  *
- * This must stop/disable actuator activity before EOL exits.
+ * Must stop/disable actuator activity before EOL exits.
  */
 esp_err_t eol_manager_force_safe_state(void);
 

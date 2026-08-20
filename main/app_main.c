@@ -1,4 +1,4 @@
-﻿#include "freertos/FreeRTOS.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "esp_log.h"
@@ -45,10 +45,8 @@ static const char *TAG = "GSM_VALVE";
 static const uint32_t EOL_HARDWARE_FINGERPRINT =
     0x47535632UL;
 
-
 static const uint32_t EOL_FIRMWARE_FINGERPRINT =
     0x00010001UL;
-
 
 static const char *EOL_FIRMWARE_VERSION =
     "GSM-VALVE";
@@ -89,6 +87,38 @@ static const battery_manager_config_t battery_config = {
 
     .high_voltage_v =
         12.4f
+};
+
+
+/* -------------------------------------------------------------------------- */
+/* EOL factory operating configuration defaults                               */
+/* -------------------------------------------------------------------------- */
+
+static const eol_factory_config_t eol_factory_defaults = {
+
+    .voltage_warn_low_v =
+        12.0f,
+
+    .voltage_warn_high_v =
+        12.4f,
+
+    .voltage_cutoff_v =
+        11.6f,
+
+    .voltage_critical_v =
+        11.2f,
+
+    .voltage_reset_v =
+        12.0f,
+
+    .voltage_bypass_timeout_ms =
+        120000U,
+
+    .current_min_safe_a =
+        4.0f,
+
+    .current_max_safe_a =
+        5.0f
 };
 
 
@@ -168,7 +198,7 @@ static const safety_manager_config_t safety_config = {
 /* EOL Manager configuration                                                  */
 /* -------------------------------------------------------------------------- */
 
-static const eol_manager_config_t eol_config = {
+static eol_manager_config_t eol_config = {
 
     .overall_timeout_ms =
         300000U,
@@ -183,7 +213,34 @@ static const eol_manager_config_t eol_config = {
         0.05f,
 
     .motor_max_current_a =
-        6.0f
+        5.0f,
+
+    .factory_config =
+        {
+            .voltage_warn_low_v =
+                12.0f,
+
+            .voltage_warn_high_v =
+                12.4f,
+
+            .voltage_cutoff_v =
+                11.6f,
+
+            .voltage_critical_v =
+                11.2f,
+
+            .voltage_reset_v =
+                12.0f,
+
+            .voltage_bypass_timeout_ms =
+                120000U,
+
+            .current_min_safe_a =
+                1.0f,
+
+            .current_max_safe_a =
+                5.0f
+        }
 };
 
 
@@ -273,7 +330,6 @@ static esp_err_t app_run_eol_stage2a(
 {
     esp_err_t err;
 
-
     ESP_LOGI(
         TAG,
         "==================================================");
@@ -294,11 +350,6 @@ static esp_err_t app_run_eol_stage2a(
         TAG,
         "==================================================");
 
-
-    /* ---------------------------------------------------------------------- */
-    /* Start EOL                                                              */
-    /* ---------------------------------------------------------------------- */
-
     err =
         eol_manager_start();
 
@@ -311,11 +362,6 @@ static esp_err_t app_run_eol_stage2a(
 
         return err;
     }
-
-
-    /* ---------------------------------------------------------------------- */
-    /* I2C                                                                     */
-    /* ---------------------------------------------------------------------- */
 
     ESP_LOGI(
         TAG,
@@ -333,11 +379,6 @@ static esp_err_t app_run_eol_stage2a(
             esp_err_to_name(err));
     }
 
-
-    /* ---------------------------------------------------------------------- */
-    /* RTC                                                                     */
-    /* ---------------------------------------------------------------------- */
-
     ESP_LOGI(
         TAG,
         "EOL TEST: RTC");
@@ -353,11 +394,6 @@ static esp_err_t app_run_eol_stage2a(
             "EOL RTC test failed: %s",
             esp_err_to_name(err));
     }
-
-
-    /* ---------------------------------------------------------------------- */
-    /* Encoder                                                                 */
-    /* ---------------------------------------------------------------------- */
 
     ESP_LOGI(
         TAG,
@@ -375,11 +411,6 @@ static esp_err_t app_run_eol_stage2a(
             esp_err_to_name(err));
     }
 
-
-    /* ---------------------------------------------------------------------- */
-    /* INA226                                                                  */
-    /* ---------------------------------------------------------------------- */
-
     ESP_LOGI(
         TAG,
         "EOL TEST: INA226");
@@ -395,11 +426,6 @@ static esp_err_t app_run_eol_stage2a(
             "EOL INA226 test failed: %s",
             esp_err_to_name(err));
     }
-
-
-    /* ---------------------------------------------------------------------- */
-    /* Battery                                                                 */
-    /* ---------------------------------------------------------------------- */
 
     ESP_LOGI(
         TAG,
@@ -417,11 +443,6 @@ static esp_err_t app_run_eol_stage2a(
             esp_err_to_name(err));
     }
 
-
-    /* ---------------------------------------------------------------------- */
-    /* Process EOL                                                             */
-    /* ---------------------------------------------------------------------- */
-
     err =
         eol_manager_process(
             now_ms);
@@ -436,11 +457,6 @@ static esp_err_t app_run_eol_stage2a(
         return err;
     }
 
-
-    /* ---------------------------------------------------------------------- */
-    /* Force safe state                                                        */
-    /* ---------------------------------------------------------------------- */
-
     err =
         eol_manager_force_safe_state();
 
@@ -453,11 +469,6 @@ static esp_err_t app_run_eol_stage2a(
 
         return err;
     }
-
-
-    /* ---------------------------------------------------------------------- */
-    /* Read EOL status                                                         */
-    /* ---------------------------------------------------------------------- */
 
     eol_status_t status = {0};
 
@@ -475,7 +486,6 @@ static esp_err_t app_run_eol_stage2a(
         return err;
     }
 
-
     ESP_LOGI(
         TAG,
         "EOL results: "
@@ -491,11 +501,6 @@ static esp_err_t app_run_eol_stage2a(
             status.tests_skipped,
         (unsigned long)
             status.tests_not_run);
-
-
-    /* ---------------------------------------------------------------------- */
-    /* Persist completed EOL result                                           */
-    /* ---------------------------------------------------------------------- */
 
     if (status.state ==
         EOL_STATE_COMPLETE) {
@@ -514,11 +519,9 @@ static esp_err_t app_run_eol_stage2a(
             return err;
         }
 
-
         ESP_LOGI(
             TAG,
             "Factory EOL result saved to NVS");
-
 
         if (status.overall_result ==
             EOL_OVERALL_PASS) {
@@ -526,7 +529,6 @@ static esp_err_t app_run_eol_stage2a(
             ESP_LOGI(
                 TAG,
                 "FACTORY EOL RESULT: PASS");
-
         }
         else {
 
@@ -543,11 +545,6 @@ static esp_err_t app_run_eol_stage2a(
             "not saving factory record");
     }
 
-
-    /* ---------------------------------------------------------------------- */
-    /* EOL summary                                                             */
-    /* ---------------------------------------------------------------------- */
-
     err =
         eol_manager_log_summary();
 
@@ -561,11 +558,9 @@ static esp_err_t app_run_eol_stage2a(
         return err;
     }
 
-
     ESP_LOGI(
         TAG,
         "EOL Stage 2A complete");
-
 
     return ESP_OK;
 }
@@ -579,7 +574,6 @@ static void app_log_eol_persistence_status(void)
 {
     eol_persistence_validity_t validity =
         eol_persistence_get_validity();
-
 
     switch (validity) {
 
@@ -602,7 +596,6 @@ static void app_log_eol_persistence_status(void)
                 "==================================================");
 
             break;
-
 
         case EOL_PERSISTENCE_REVERIFICATION_REQUIRED:
 
@@ -629,7 +622,6 @@ static void app_log_eol_persistence_status(void)
 
             break;
 
-
         case EOL_PERSISTENCE_FAILED:
 
             ESP_LOGW(
@@ -646,7 +638,6 @@ static void app_log_eol_persistence_status(void)
                 "==================================================");
 
             break;
-
 
         case EOL_PERSISTENCE_NOT_TESTED:
 
@@ -677,16 +668,9 @@ static void app_log_eol_persistence_status(void)
 /* Network initialization                                                     */
 /* -------------------------------------------------------------------------- */
 
-/*
- * Initialize the ESP-IDF network/event-loop infrastructure required by
- * the local EOL SoftAP.
- *
- * This function does not start Wi-Fi.
- */
 static esp_err_t app_init_network_stack(void)
 {
     esp_err_t err;
-
 
     err =
         esp_netif_init();
@@ -702,7 +686,6 @@ static esp_err_t app_init_network_stack(void)
         return err;
     }
 
-
     err =
         esp_event_loop_create_default();
 
@@ -717,11 +700,9 @@ static esp_err_t app_init_network_stack(void)
         return err;
     }
 
-
     ESP_LOGI(
         TAG,
         "Network/event infrastructure initialized");
-
 
     return ESP_OK;
 }
@@ -734,11 +715,6 @@ static esp_err_t app_init_network_stack(void)
 static esp_err_t app_init(void)
 {
     esp_err_t err;
-
-
-    /* ---------------------------------------------------------------------- */
-    /* NVS                                                                      */
-    /* ---------------------------------------------------------------------- */
 
     err =
         hal_nvs_init();
@@ -756,7 +732,6 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "NVS initialized");
-
 
     /* ---------------------------------------------------------------------- */
     /* EOL Persistence                                                         */
@@ -779,7 +754,6 @@ static esp_err_t app_init(void)
         TAG,
         "EOL persistence initialized");
 
-
     err =
         eol_persistence_set_hardware_fingerprint(
             EOL_HARDWARE_FINGERPRINT);
@@ -793,7 +767,6 @@ static esp_err_t app_init(void)
 
         return err;
     }
-
 
     err =
         eol_persistence_set_firmware_fingerprint(
@@ -809,7 +782,6 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     err =
         eol_persistence_set_firmware_version(
             EOL_FIRMWARE_VERSION);
@@ -824,7 +796,6 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     err =
         eol_persistence_validate_current_identity();
 
@@ -838,9 +809,127 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     app_log_eol_persistence_status();
 
+    /* ---------------------------------------------------------------------- */
+    /* EOL Factory Operating Configuration                                     */
+    /* ---------------------------------------------------------------------- */
+
+    eol_factory_config_t active_factory_config = {0};
+    err =
+        eol_persistence_load_factory_config(
+            &active_factory_config);
+
+    if (err == ESP_ERR_NOT_FOUND) {
+
+        active_factory_config =
+            eol_factory_defaults;
+
+        ESP_LOGI(
+            TAG,
+            "No EOL factory configuration found; "
+            "using firmware defaults");
+
+    } else if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Failed to load EOL factory configuration: %s",
+            esp_err_to_name(err));
+
+        active_factory_config =
+            eol_factory_defaults;
+
+    }
+
+    /*
+     * Validate the configuration before making it active.
+     *
+     * This protects the runtime configuration even when
+     * the stored NVS record is corrupted or outdated.
+     */
+    err =
+        eol_manager_validate_factory_config(
+            &active_factory_config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "EOL factory configuration rejected: %s; "
+            "using firmware defaults",
+            esp_err_to_name(err));
+
+        active_factory_config =
+            eol_factory_defaults;
+
+        err =
+            eol_manager_validate_factory_config(
+                &active_factory_config);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "Firmware EOL factory defaults are invalid: %s",
+                esp_err_to_name(err));
+
+            return err;
+        }
+    }
+
+        /*
+     * Pass the validated factory configuration into the
+     * EOL manager configuration before initialization.
+     */
+    eol_config.factory_config =
+        active_factory_config;
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Failed to apply EOL factory configuration: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "EOL factory configuration active: "
+        "current_min=%.2f A, current_max=%.2f A",
+        active_factory_config.current_min_safe_a,
+        active_factory_config.current_max_safe_a);
+
+
+    ESP_LOGI(
+        TAG,
+        "EOL configuration: "
+        "Vlow=%.2f V "
+        "Vhigh=%.2f V "
+        "Vcut=%.2f V "
+        "Vcritical=%.2f V "
+        "Vreset=%.2f V "
+        "bypass=%lu ms "
+        "Imin=%.2f A "
+        "Imax=%.2f A",
+        (double)
+            active_factory_config.voltage_warn_low_v,
+        (double)
+            active_factory_config.voltage_warn_high_v,
+        (double)
+            active_factory_config.voltage_cutoff_v,
+        (double)
+            active_factory_config.voltage_critical_v,
+        (double)
+            active_factory_config.voltage_reset_v,
+        (unsigned long)
+            active_factory_config.voltage_bypass_timeout_ms,
+        (double)
+            active_factory_config.current_min_safe_a,
+        (double)
+            active_factory_config.current_max_safe_a);
 
     /* ---------------------------------------------------------------------- */
     /* I2C                                                                     */
@@ -873,7 +962,6 @@ static esp_err_t app_init(void)
         TAG,
         "I2C initialized: 100 kHz");
 
-
     /* ---------------------------------------------------------------------- */
     /* RTC                                                                     */
     /* ---------------------------------------------------------------------- */
@@ -894,7 +982,6 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "RTC manager initialized");
-
 
     /* ---------------------------------------------------------------------- */
     /* INA226                                                                  */
@@ -926,15 +1013,17 @@ static esp_err_t app_init(void)
         (double)
             ina226_config.current_lsb_a);
 
-
     /* ---------------------------------------------------------------------- */
     /* Condition Monitor                                                       */
     /* ---------------------------------------------------------------------- */
+    condition_monitor_config_t runtime_condition_monitor_config =
+        condition_monitor_config;
 
-    err =
-        condition_monitor_manager_init(
-            &condition_monitor_config);
-
+    runtime_condition_monitor_config.overcurrent_trip_a =
+        active_factory_config.current_max_safe_a;
+   err =
+    condition_monitor_manager_init(
+        &runtime_condition_monitor_config);
     if (err != ESP_OK) {
 
         ESP_LOGE(
@@ -949,16 +1038,19 @@ static esp_err_t app_init(void)
         TAG,
         "Condition Monitor initialized: OC=%.2f A",
         (double)
-            condition_monitor_config.overcurrent_trip_a);
-
+                     runtime_condition_monitor_config.overcurrent_trip_a);
 
     /* ---------------------------------------------------------------------- */
     /* Safety Manager                                                          */
     /* ---------------------------------------------------------------------- */
+  safety_manager_config_t runtime_safety_config =
+        safety_config;
 
+    runtime_safety_config.overcurrent_trip_a =
+        active_factory_config.current_max_safe_a;
     err =
         safety_manager_init(
-            &safety_config);
+            &runtime_safety_config);
 
     if (err != ESP_OK) {
 
@@ -973,7 +1065,6 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "Safety Manager initialized");
-
 
     /* ---------------------------------------------------------------------- */
     /* AS5600                                                                  */
@@ -1003,7 +1094,6 @@ static esp_err_t app_init(void)
         TAG,
         "AS5600 initialized");
 
-
     /* ---------------------------------------------------------------------- */
     /* Encoder Manager                                                         */
     /* ---------------------------------------------------------------------- */
@@ -1024,7 +1114,6 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "Encoder manager initialized");
-
 
     /* ---------------------------------------------------------------------- */
     /* Encoder Persistence                                                     */
@@ -1047,7 +1136,6 @@ static esp_err_t app_init(void)
         TAG,
         "Encoder persistence initialized");
 
-
     /* ---------------------------------------------------------------------- */
     /* Encoder Position                                                        */
     /* ---------------------------------------------------------------------- */
@@ -1068,7 +1156,6 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "Encoder position manager initialized");
-
 
     /* ---------------------------------------------------------------------- */
     /* Restore Encoder Position                                                */
@@ -1100,7 +1187,6 @@ static esp_err_t app_init(void)
             "Encoder position restored");
     }
 
-
     /* ---------------------------------------------------------------------- */
     /* Initial Encoder Reading                                                */
     /* ---------------------------------------------------------------------- */
@@ -1121,7 +1207,6 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     err =
         encoder_position_update(
             angle);
@@ -1135,7 +1220,6 @@ static esp_err_t app_init(void)
 
         return err;
     }
-
 
     /* ---------------------------------------------------------------------- */
     /* Encoder Diagnostic State                                               */
@@ -1157,7 +1241,6 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     ESP_LOGI(
         TAG,
         "Encoder position: "
@@ -1172,7 +1255,6 @@ static esp_err_t app_init(void)
         (double)
             position.total_turns,
         position.restored ? "yes" : "no");
-
 
     /* ---------------------------------------------------------------------- */
     /* Battery Manager                                                        */
@@ -1192,12 +1274,10 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     ESP_LOGI(
         TAG,
         "Battery manager initialized: "
         "GPIO1 / ADC1_CH0");
-
 
     /* ---------------------------------------------------------------------- */
     /* Initial Battery Reading                                                */
@@ -1219,7 +1299,6 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     ESP_LOGI(
         TAG,
         "Battery: "
@@ -1232,7 +1311,6 @@ static esp_err_t app_init(void)
             battery.battery_voltage_v,
         (int)
             battery.state);
-
 
     /* ---------------------------------------------------------------------- */
     /* A7670C Modem                                                           */
@@ -1255,7 +1333,6 @@ static esp_err_t app_init(void)
             TAG,
             "A7670C modem driver initialized");
 
-
         err =
             drv_modem_ping();
 
@@ -1273,7 +1350,6 @@ static esp_err_t app_init(void)
                 "A7670C AT ping passed");
         }
     }
-
 
     /* ---------------------------------------------------------------------- */
     /* EOL Manager                                                             */
@@ -1293,11 +1369,9 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     ESP_LOGI(
         TAG,
         "EOL manager initialized");
-
 
     /* ---------------------------------------------------------------------- */
     /* Network infrastructure                                                  */
@@ -1316,9 +1390,8 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     /* ---------------------------------------------------------------------- */
-    /* EOL Web                                                                  */
+    /* EOL Web                                                                 */
     /* ---------------------------------------------------------------------- */
 
     err =
@@ -1335,11 +1408,9 @@ static esp_err_t app_init(void)
         return err;
     }
 
-
     ESP_LOGI(
         TAG,
         "EOL web subsystem initialized");
-
 
     err =
         eol_web_start();
@@ -1353,7 +1424,6 @@ static esp_err_t app_init(void)
 
         return err;
     }
-
 
     ESP_LOGI(
         TAG,
@@ -1377,7 +1447,6 @@ static esp_err_t app_init(void)
         TAG,
         "==================================================");
 
-
     return ESP_OK;
 }
 
@@ -1392,10 +1461,8 @@ void app_main(void)
         TAG,
         "GSM-VALVE firmware starting");
 
-
     esp_err_t err =
         app_init();
-
 
     if (err != ESP_OK) {
 
@@ -1404,7 +1471,6 @@ void app_main(void)
             "Application initialization failed: %s",
             esp_err_to_name(err));
 
-
         while (1) {
 
             vTaskDelay(
@@ -1412,42 +1478,23 @@ void app_main(void)
         }
     }
 
-
     ESP_LOGI(
         TAG,
         "Application initialization complete");
-
 
     /* ---------------------------------------------------------------------- */
     /* EOL Stage 2A                                                           */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Stage 2A remains automatic for WPK-027A.
-     *
-     * The web RUN EOL button is NOT connected to execution yet.
-     *
-     * Safe tests:
-     *
-     *   I2C
-     *   RTC
-     *   AS5600
-     *   INA226
-     *   Battery
-     *
-     * Motor control remains disconnected.
-     */
     {
         uint32_t now_ms =
             (uint32_t)(
                 esp_timer_get_time() /
                 1000ULL);
 
-
         err =
             app_run_eol_stage2a(
                 now_ms);
-
 
         if (err != ESP_OK) {
 
@@ -1464,16 +1511,10 @@ void app_main(void)
         }
     }
 
-
     /* ---------------------------------------------------------------------- */
     /* Runtime Monitoring                                                     */
     /* ---------------------------------------------------------------------- */
 
-    /*
-     * Motor control is not connected yet.
-     *
-     * Therefore motor_running remains false.
-     */
     while (1) {
 
         uint32_t now_ms =
@@ -1481,20 +1522,13 @@ void app_main(void)
                 esp_timer_get_time() /
                 1000ULL);
 
-
         const bool motor_running =
             false;
-
-
-        /* ------------------------------------------------------------------ */
-        /* Condition Monitor update                                           */
-        /* ------------------------------------------------------------------ */
 
         err =
             condition_monitor_manager_update(
                 now_ms,
                 motor_running);
-
 
         if (err != ESP_OK) {
 
@@ -1503,27 +1537,18 @@ void app_main(void)
                 "Condition Monitor update failed: %s",
                 esp_err_to_name(err));
 
-
             vTaskDelay(
                 pdMS_TO_TICKS(1000));
-
 
             continue;
         }
 
-
-        /* ------------------------------------------------------------------ */
-        /* Condition Monitor reading                                          */
-        /* ------------------------------------------------------------------ */
-
         condition_monitor_reading_t reading =
             {0};
-
 
         err =
             condition_monitor_manager_get_reading(
                 &reading);
-
 
         if (err != ESP_OK) {
 
@@ -1532,27 +1557,18 @@ void app_main(void)
                 "Condition Monitor reading failed: %s",
                 esp_err_to_name(err));
 
-
             vTaskDelay(
                 pdMS_TO_TICKS(1000));
-
 
             continue;
         }
 
-
-        /* ------------------------------------------------------------------ */
-        /* Condition Monitor state                                            */
-        /* ------------------------------------------------------------------ */
-
         condition_monitor_state_t condition_state =
             {0};
-
 
         err =
             condition_monitor_manager_get_state(
                 &condition_state);
-
 
         if (err != ESP_OK) {
 
@@ -1561,18 +1577,11 @@ void app_main(void)
                 "Condition Monitor state failed: %s",
                 esp_err_to_name(err));
 
-
             vTaskDelay(
                 pdMS_TO_TICKS(1000));
 
-
             continue;
         }
-
-
-        /* ------------------------------------------------------------------ */
-        /* Safety Manager inputs                                               */
-        /* ------------------------------------------------------------------ */
 
         const safety_manager_inputs_t safety_inputs = {
 
@@ -1610,21 +1619,14 @@ void app_main(void)
                 condition_state.bypass_acknowledged
         };
 
-
-        /* ------------------------------------------------------------------ */
-        /* Safety Manager evaluation                                           */
-        /* ------------------------------------------------------------------ */
-
         safety_manager_output_t safety_output =
             {0};
-
 
         err =
             safety_manager_evaluate(
                 &safety_inputs,
                 now_ms,
                 &safety_output);
-
 
         if (err != ESP_OK) {
 
@@ -1633,18 +1635,11 @@ void app_main(void)
                 "Safety Manager evaluation failed: %s",
                 esp_err_to_name(err));
 
-
             vTaskDelay(
                 pdMS_TO_TICKS(1000));
 
-
             continue;
         }
-
-
-        /* ------------------------------------------------------------------ */
-        /* Runtime diagnostics                                                 */
-        /* ------------------------------------------------------------------ */
 
         ESP_LOGI(
             TAG,
@@ -1679,7 +1674,6 @@ void app_main(void)
             safety_output.request_motor_close,
             safety_output.bypass_required,
             safety_output.fault);
-
 
         vTaskDelay(
             pdMS_TO_TICKS(1000));
