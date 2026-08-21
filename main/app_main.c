@@ -1,4 +1,4 @@
-#include "freertos/FreeRTOS.h"
+﻿#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "esp_log.h"
@@ -14,7 +14,8 @@
 #include "drv_as5600.h"
 #include "drv_ina226.h"
 #include "drv_modem.h"
-
+#include "drv_rs485.h"
+#include "modbus_master.h"
 #include "encoder_manager.h"
 #include "encoder_persistence_manager.h"
 #include "encoder_position_manager.h"
@@ -22,6 +23,8 @@
 #include "battery_manager.h"
 
 #include "condition_monitor_manager.h"
+#include "modbus_device_manager.h"
+#include "modbus_poll_manager.h"
 #include "safety_manager.h"
 
 #include "eol_manager.h"
@@ -280,7 +283,69 @@ static const eol_web_config_t eol_web_config = {
 /* -------------------------------------------------------------------------- */
 /* A7670C modem configuration                                                 */
 /* -------------------------------------------------------------------------- */
+/* -------------------------------------------------------------------------- */
+/* RS485 configuration                                                        */
+/* -------------------------------------------------------------------------- */
 
+static const drv_rs485_config_t rs485_config = {
+
+    .port =
+        UART_NUM_2,
+
+    .baud_rate =
+        9600U,
+
+    .data_bits =
+        UART_DATA_8_BITS,
+
+    .parity =
+        UART_PARITY_DISABLE,
+
+    .stop_bits =
+        UART_STOP_BITS_1,
+
+    .rx_buffer_size =
+        1024U,
+
+    .tx_buffer_size =
+        1024U,
+
+    .timeout_ms =
+        1000U
+};
+
+
+/* -------------------------------------------------------------------------- */
+/* Modbus master configuration                                                */
+/* -------------------------------------------------------------------------- */
+
+static const modbus_master_config_t modbus_master_config = {
+
+    .slave_address =
+        MODBUS_DEFAULT_SLAVE,
+
+    .timeout_ms =
+        1000U,
+
+    .max_registers =
+        MODBUS_DEVICE_MAX_REGISTERS
+};
+
+
+/* -------------------------------------------------------------------------- */
+/* Modbus polling configuration                                               */
+/* -------------------------------------------------------------------------- */
+
+static const modbus_poll_manager_config_t modbus_poll_config = {
+
+    .poll_interval_ms =
+        MODBUS_POLL_DEFAULT_INTERVAL_MS
+};
+
+
+/* -------------------------------------------------------------------------- */
+/* A7670C modem configuration                                                 */
+/* -------------------------------------------------------------------------- */
 static const drv_modem_config_t modem_config = {
 
     .uart_port =
@@ -982,6 +1047,49 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "RTC manager initialized");
+            /* RS485 */
+    err = drv_rs485_init(&rs485_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "RS485 init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Modbus Master */
+    err = modbus_master_init(&modbus_master_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Modbus master init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    /* Modbus Device Manager */
+    err = modbus_device_manager_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Modbus device manager init failed: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    /* Modbus Poll Manager */
+    err = modbus_poll_manager_init(&modbus_poll_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Modbus poll manager init failed: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+/*
+err = modbus_poll_manager_start();
+if (err != ESP_OK) {
+    ESP_LOGE(TAG, "Modbus poll start failed: %s",
+             esp_err_to_name(err));
+    return err;
+}
+*/
+    err = modbus_poll_manager_start();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Modbus poll start failed: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
 
     /* ---------------------------------------------------------------------- */
     /* INA226                                                                  */
@@ -1446,7 +1554,15 @@ static esp_err_t app_init(void)
     ESP_LOGI(
         TAG,
         "==================================================");
+    err = modbus_poll_manager_start();
 
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Modbus poll start failed: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    ESP_LOGI(TAG, "Modbus polling started");
     return ESP_OK;
 }
 
