@@ -23,7 +23,10 @@
         "../framework/managers/encoder_position/encoder_position_manager.c"
         "../framework/managers/rtc/rtc_manager.c"
         "../framework/managers/battery/battery_manager.c"
+
         "../framework/managers/modbus_devices/modbus_device_manager.c"
+        "../framework/managers/modbus_poll/modbus_poll_manager.c"
+
         "../framework/managers/scheduling/scheduling_manager.c"
         "../framework/managers/condition_monitor/condition_monitor_manager.c"
         "../framework/managers/safety/safety_manager.c"
@@ -48,7 +51,10 @@
         "../framework/managers/encoder_position"
         "../framework/managers/rtc"
         "../framework/managers/battery"
+
         "../framework/managers/modbus_devices"
+        "../framework/managers/modbus_poll"
+
         "../framework/managers/scheduling"
         "../framework/managers/condition_monitor"
         "../framework/managers/safety"
