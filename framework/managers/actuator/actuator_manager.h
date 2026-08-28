@@ -58,6 +58,13 @@ typedef struct
      */
     uint32_t max_runtime_ms;
 
+    /*
+     * Normal motor PWM duty cycle.
+     *
+     * Valid range: 0.0 to 100.0 percent.
+     */
+    float motor_duty_percent;
+
 } actuator_manager_config_t;
 
 

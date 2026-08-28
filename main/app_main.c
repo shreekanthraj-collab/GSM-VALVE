@@ -1,4 +1,7 @@
-﻿#include "freertos/FreeRTOS.h"
+﻿#include "hal_actuator.h"
+#include "actuator_manager.h"
+
+#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include "esp_log.h"
@@ -1175,6 +1178,95 @@ if (err != ESP_OK) {
         "Safety Manager initialized");
 
     /* ---------------------------------------------------------------------- */
+    /* Actuator HAL                                                            */
+    /* ---------------------------------------------------------------------- */
+
+    const hal_actuator_config_t actuator_hal_config = {
+
+        /*
+         * Frozen actuator PWM configuration.
+         *
+         * These values must match the frozen WPK/GSM-VALVE
+         * actuator specification.
+         */
+        .pwm_frequency_hz =
+            1000U,
+
+        .pwm_resolution_bits =
+            10U
+    };
+
+    err =
+        hal_actuator_init(
+            &actuator_hal_config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Actuator HAL initialization failed: %s",
+            esp_err_to_name(err));
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Actuator HAL initialized: "
+        "PWM=%lu Hz, resolution=%u bits",
+        (unsigned long)
+            actuator_hal_config.pwm_frequency_hz,
+        actuator_hal_config.pwm_resolution_bits);
+
+    /* ---------------------------------------------------------------------- */
+    /* Actuator Manager                                                        */
+    /* ---------------------------------------------------------------------- */
+
+    const actuator_manager_config_t actuator_manager_config = {
+
+        /*
+         * Safety Manager remains authoritative for the
+         * maximum motor runtime.
+         */
+        .max_runtime_ms =
+            safety_config.motor_max_runtime_ms,
+
+        /*
+         * Normal motor operating duty.
+         */
+        .motor_duty_percent =
+            100.0f
+    };
+
+    err =
+        actuator_manager_init(
+            &actuator_manager_config);
+
+    if (err != ESP_OK) {
+
+        ESP_LOGE(
+            TAG,
+            "Actuator Manager initialization failed: %s",
+            esp_err_to_name(err));
+
+        /*
+         * Do not leave the actuator HAL initialized if the
+         * manager cannot take ownership.
+         */
+        (void)hal_actuator_deinit();
+
+        return err;
+    }
+
+    ESP_LOGI(
+        TAG,
+        "Actuator Manager initialized: "
+        "max_runtime=%lu ms, duty=%.1f%%",
+        (unsigned long)
+            actuator_manager_config.max_runtime_ms,
+        (double)
+            actuator_manager_config.motor_duty_percent);
+    /* ---------------------------------------------------------------------- */
     /* AS5600                                                                  */
     /* ---------------------------------------------------------------------- */
 
@@ -1627,9 +1719,9 @@ void app_main(void)
         }
     }
 
-    /* ---------------------------------------------------------------------- */
-    /* Runtime Monitoring                                                     */
-    /* ---------------------------------------------------------------------- */
+     /* ------------------------------------------------------------------ */
+    /* Runtime Monitoring                                                 */
+    /* ------------------------------------------------------------------ */
 
     while (1) {
 
@@ -1638,8 +1730,37 @@ void app_main(void)
                 esp_timer_get_time() /
                 1000ULL);
 
+        /* -------------------------------------------------------------- */
+        /* Actuator Manager                                               */
+        /* -------------------------------------------------------------- */
+
+        err =
+            actuator_manager_update(
+                now_ms);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "Actuator Manager update failed: %s",
+                esp_err_to_name(err));
+
+            vTaskDelay(
+                pdMS_TO_TICKS(100));
+
+            continue;
+        }
+
+        /*
+         * Actuator Manager is the authoritative source
+         * for the motor-running state.
+         */
         const bool motor_running =
-            false;
+            actuator_manager_is_running();
+
+        /* -------------------------------------------------------------- */
+        /* Condition Monitor                                               */
+        /* -------------------------------------------------------------- */
 
         err =
             condition_monitor_manager_update(
@@ -1699,6 +1820,10 @@ void app_main(void)
             continue;
         }
 
+        /* -------------------------------------------------------------- */
+        /* Safety Manager Inputs                                          */
+        /* -------------------------------------------------------------- */
+
         const safety_manager_inputs_t safety_inputs = {
 
             .motor_running =
@@ -1735,6 +1860,10 @@ void app_main(void)
                 condition_state.bypass_acknowledged
         };
 
+        /* -------------------------------------------------------------- */
+        /* Safety Evaluation                                              */
+        /* -------------------------------------------------------------- */
+
         safety_manager_output_t safety_output =
             {0};
 
@@ -1757,6 +1886,38 @@ void app_main(void)
             continue;
         }
 
+        /* -------------------------------------------------------------- */
+        /* Apply Safety Decision                                          */
+        /* -------------------------------------------------------------- */
+
+        err =
+            actuator_manager_apply_safety(
+                safety_output.allow_motor_start,
+                safety_output.allow_motor_run,
+                safety_output.request_motor_stop,
+                safety_output.request_motor_close,
+                safety_output.fault,
+                now_ms);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "Actuator safety application failed: %s",
+                esp_err_to_name(err));
+
+            vTaskDelay(
+                pdMS_TO_TICKS(100));
+
+            continue;
+        }
+
+        
+
+        /* -------------------------------------------------------------- */
+        /* Monitoring log                                                 */
+        /* -------------------------------------------------------------- */
+
         ESP_LOGI(
             TAG,
             "MON: "
@@ -1771,7 +1932,8 @@ void app_main(void)
             "Stop=%d "
             "Close=%d "
             "Bypass=%d "
-            "Fault=%d",
+            "Fault=%d "
+            "Motor=%d",
             (double)
                 reading.bus_voltage_v,
             (double)
@@ -1789,9 +1951,14 @@ void app_main(void)
             safety_output.request_motor_stop,
             safety_output.request_motor_close,
             safety_output.bypass_required,
-            safety_output.fault);
+            safety_output.fault,
+            motor_running);
+
+        /* -------------------------------------------------------------- */
+        /* Runtime delay                                                   */
+        /* -------------------------------------------------------------- */
 
         vTaskDelay(
-            pdMS_TO_TICKS(1000));
+            pdMS_TO_TICKS(100));
     }
 }
