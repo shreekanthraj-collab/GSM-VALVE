@@ -1750,6 +1750,38 @@ void app_main(void)
 
             continue;
         }
+                /* -------------------------------------------------------------- */
+        /* Encoder Position                                               */
+        /* -------------------------------------------------------------- */
+
+        uint16_t encoder_angle = 0U;
+
+        err =
+            drv_as5600_read_angle(
+                &encoder_angle);
+
+        if (err != ESP_OK) {
+
+            ESP_LOGE(
+                TAG,
+                "AS5600 runtime read failed: %s",
+                esp_err_to_name(err));
+
+        }
+        else {
+
+            err =
+                encoder_position_update(
+                    encoder_angle);
+
+            if (err != ESP_OK) {
+
+                ESP_LOGE(
+                    TAG,
+                    "Encoder position update failed: %s",
+                    esp_err_to_name(err));
+            }
+        }
 
         /*
          * Actuator Manager is the authoritative source
