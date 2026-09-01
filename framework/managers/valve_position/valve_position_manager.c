@@ -11,11 +11,25 @@
 
 static bool s_initialized = false;
 static bool s_calibrated = false;
+static bool s_closed_calibration_pending = false;
 
 static int64_t s_closed_total_angle = 0;
 static int64_t s_open_total_angle = 0;
 
 static valve_position_status_t s_status;
+
+
+/* -------------------------------------------------------------------------- */
+/* Constants                                                                  */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Encoder-angle tolerance used when deciding that a target has been reached.
+ *
+ * AS5600 resolution is 4096 counts per revolution. A small tolerance avoids
+ * requiring an exact integer encoder position at the target.
+ */
+#define VALVE_POSITION_TARGET_TOLERANCE_ANGLE 2
 
 
 /* -------------------------------------------------------------------------- */
@@ -55,6 +69,7 @@ esp_err_t valve_position_manager_init(void)
 
     s_initialized = true;
     s_calibrated = false;
+    s_closed_calibration_pending = false;
 
     s_closed_total_angle = 0;
     s_open_total_angle = 0;
@@ -77,6 +92,9 @@ esp_err_t valve_position_manager_init(void)
         s_calibrated =
             record.valid != 0U;
 
+        s_closed_calibration_pending =
+            false;
+
         return ESP_OK;
     }
 
@@ -91,6 +109,228 @@ esp_err_t valve_position_manager_init(void)
      * The actuator simply remains uncalibrated.
      */
     return ESP_OK;
+}
+
+
+/* -------------------------------------------------------------------------- */
+/* Calibration                                                                */
+/* -------------------------------------------------------------------------- */
+
+esp_err_t valve_position_calibrate_closed(void)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * Calibration is only permitted while the actuator is stopped.
+     */
+    if (actuator_manager_is_running()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!encoder_position_is_valid()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    encoder_position_state_t position =
+        {0};
+
+    esp_err_t err =
+        encoder_position_get_state(
+            &position);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /*
+     * Keep the new CLOSED point in RAM only.
+     *
+     * The persisted calibration is not modified until a valid
+     * OPEN point is subsequently recorded.
+     */
+    s_closed_total_angle =
+        position.total_angle;
+
+    s_closed_calibration_pending =
+        true;
+
+    s_calibrated =
+        false;
+
+    /*
+     * A new calibration sequence invalidates any active
+     * position target.
+     */
+    s_status.target_active =
+        false;
+
+    s_status.moving =
+        false;
+
+    s_status.valid =
+        false;
+
+    s_status.current_total_angle =
+        position.total_angle;
+
+    return ESP_OK;
+}
+
+
+esp_err_t valve_position_calibrate_open(void)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * OPEN calibration must be the second step of a fresh
+     * CLOSED -> OPEN calibration sequence.
+     */
+    if (!s_closed_calibration_pending) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * Calibration is only permitted while the actuator is stopped.
+     */
+    if (actuator_manager_is_running()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!encoder_position_is_valid()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    encoder_position_state_t position =
+        {0};
+
+    esp_err_t err =
+        encoder_position_get_state(
+            &position);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    const int64_t open_total_angle =
+        position.total_angle;
+
+    /*
+     * OPEN must be mechanically above CLOSED in absolute
+     * encoder space because target calculation assumes this
+     * orientation.
+     */
+    if (open_total_angle <=
+        s_closed_total_angle) {
+
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    valve_position_persistence_record_t record =
+        {0};
+
+    record.version =
+        VALVE_POSITION_PERSISTENCE_VERSION;
+
+    record.closed_total_angle =
+        s_closed_total_angle;
+
+    record.open_total_angle =
+        open_total_angle;
+
+    record.valid =
+        1U;
+
+    /*
+     * The persistence layer calculates and verifies the checksum.
+     */
+    err =
+        valve_position_persistence_save(
+            &record);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /*
+     * Only mark the calibration active after persistence
+     * succeeds.
+     */
+    s_open_total_angle =
+        open_total_angle;
+
+    s_calibrated =
+        true;
+
+    s_closed_calibration_pending =
+        false;
+
+    s_status.target_active =
+        false;
+
+    s_status.moving =
+        false;
+
+    s_status.valid =
+        true;
+
+    s_status.current_total_angle =
+        position.total_angle;
+
+    return ESP_OK;
+}
+
+
+esp_err_t valve_position_calibration_clear(void)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * Calibration must never modify an active motor operation.
+     */
+    if (actuator_manager_is_running()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    esp_err_t err =
+        valve_position_persistence_erase();
+
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    s_closed_total_angle =
+        0;
+
+    s_open_total_angle =
+        0;
+
+    s_calibrated =
+        false;
+
+    s_closed_calibration_pending =
+        false;
+
+    s_status =
+        (valve_position_status_t){0};
+
+    s_status.target_percent =
+        VALVE_POSITION_0_PERCENT;
+
+    return ESP_OK;
+}
+
+
+bool valve_position_manager_is_calibrated(void)
+{
+    return
+        s_initialized &&
+        s_calibrated;
 }
 
 
@@ -224,10 +464,24 @@ esp_err_t valve_position_manager_update(
     }
 
     /*
-     * Target reached.
+     * Calculate signed position error.
      */
-    if (position.total_angle ==
-        s_status.target_total_angle) {
+    const int64_t position_error =
+        position.total_angle -
+        s_status.target_total_angle;
+
+    /*
+     * Target reached.
+     *
+     * A small tolerance is used instead of requiring exact
+     * encoder equality.
+     */
+    if (position_error >=
+            -(int64_t)
+                VALVE_POSITION_TARGET_TOLERANCE_ANGLE &&
+        position_error <=
+            (int64_t)
+                VALVE_POSITION_TARGET_TOLERANCE_ANGLE) {
 
         if (actuator.motor_running) {
 
@@ -240,8 +494,11 @@ esp_err_t valve_position_manager_update(
             }
         }
 
-        s_status.target_active = false;
-        s_status.moving = false;
+        s_status.target_active =
+            false;
+
+        s_status.moving =
+            false;
 
         return ESP_OK;
     }
@@ -261,7 +518,8 @@ esp_err_t valve_position_manager_update(
             actuator.direction ==
                 ACTUATOR_DIRECTION_OPEN) {
 
-            s_status.moving = true;
+            s_status.moving =
+                true;
 
             return ESP_OK;
         }
@@ -280,7 +538,8 @@ esp_err_t valve_position_manager_update(
                 return err;
             }
 
-            s_status.moving = false;
+            s_status.moving =
+                false;
 
             return ESP_OK;
         }
@@ -293,7 +552,8 @@ esp_err_t valve_position_manager_update(
             return err;
         }
 
-        s_status.moving = true;
+        s_status.moving =
+            true;
 
         return ESP_OK;
     }
@@ -307,7 +567,8 @@ esp_err_t valve_position_manager_update(
         actuator.direction ==
             ACTUATOR_DIRECTION_CLOSE) {
 
-        s_status.moving = true;
+        s_status.moving =
+            true;
 
         return ESP_OK;
     }
@@ -326,7 +587,8 @@ esp_err_t valve_position_manager_update(
             return err;
         }
 
-        s_status.moving = false;
+        s_status.moving =
+            false;
 
         return ESP_OK;
     }
@@ -339,7 +601,8 @@ esp_err_t valve_position_manager_update(
         return err;
     }
 
-    s_status.moving = true;
+    s_status.moving =
+        true;
 
     return ESP_OK;
 }
@@ -417,8 +680,11 @@ esp_err_t valve_position_manager_cancel(
     /*
      * Cancel the position target first.
      */
-    s_status.target_active = false;
-    s_status.moving = false;
+    s_status.target_active =
+        false;
+
+    s_status.moving =
+        false;
 
     /*
      * If the actuator is physically running, stop it

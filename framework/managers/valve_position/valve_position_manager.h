@@ -58,6 +58,51 @@ esp_err_t valve_position_manager_init(void);
 
 
 /* -------------------------------------------------------------------------- */
+/* Calibration                                                                */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Record the current encoder position as CLOSED.
+ *
+ * The actuator must be stopped and the encoder position must
+ * be valid.
+ *
+ * This does not start motor movement.
+ */
+esp_err_t valve_position_calibrate_closed(void);
+
+
+/*
+ * Record the current encoder position as OPEN.
+ *
+ * The actuator must be stopped and the encoder position must
+ * be valid.
+ *
+ * OPEN calibration is accepted only when it is different from
+ * the previously recorded CLOSED position.
+ *
+ * Successful OPEN calibration persists the complete calibration
+ * record and makes position control available.
+ */
+esp_err_t valve_position_calibrate_open(void);
+
+
+/*
+ * Clear the persisted CLOSED/OPEN calibration.
+ *
+ * Position control becomes unavailable until calibration is
+ * performed again.
+ */
+esp_err_t valve_position_calibration_clear(void);
+
+
+/*
+ * Return whether a valid CLOSED/OPEN calibration is active.
+ */
+bool valve_position_manager_is_calibrated(void);
+
+
+/* -------------------------------------------------------------------------- */
 /* Position command                                                           */
 /* -------------------------------------------------------------------------- */
 
