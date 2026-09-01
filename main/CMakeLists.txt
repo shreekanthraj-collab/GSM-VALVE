@@ -21,6 +21,8 @@
         "../framework/managers/encoder/encoder_manager.c"
         "../framework/managers/encoder_persistence/encoder_persistence_manager.c"
         "../framework/managers/encoder_position/encoder_position_manager.c"
+"../framework/managers/valve_position_persistence/valve_position_persistence.c"
+"../framework/managers/valve_position/valve_position_manager.c"
         "../framework/managers/rtc/rtc_manager.c"
         "../framework/managers/battery/battery_manager.c"
 
@@ -49,6 +51,8 @@
         "../framework/managers/encoder"
         "../framework/managers/encoder_persistence"
         "../framework/managers/encoder_position"
+"../framework/managers/valve_position_persistence"
+"../framework/managers/valve_position"
         "../framework/managers/rtc"
         "../framework/managers/battery"
 

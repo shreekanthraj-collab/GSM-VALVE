@@ -22,6 +22,8 @@
 #include "encoder_manager.h"
 #include "encoder_persistence_manager.h"
 #include "encoder_position_manager.h"
+#include "valve_position_persistence.h"
+#include "valve_position_manager.h"
 
 #include "battery_manager.h"
 
@@ -1455,6 +1457,48 @@ if (err != ESP_OK) {
         (double)
             position.total_turns,
         position.restored ? "yes" : "no");
+
+/* ---------------------------------------------------------------------- */
+/* Valve Position Persistence                                              */
+/* ---------------------------------------------------------------------- */
+
+err =
+    valve_position_persistence_init();
+
+if (err != ESP_OK) {
+
+    ESP_LOGE(
+        TAG,
+        "Valve position persistence initialization failed: %s",
+        esp_err_to_name(err));
+
+    return err;
+}
+
+ESP_LOGI(
+    TAG,
+    "Valve position persistence initialized");
+    /* ---------------------------------------------------------------------- */
+/* Valve Position Manager                                                  */
+/* ---------------------------------------------------------------------- */
+
+err =
+    valve_position_manager_init();
+
+if (err != ESP_OK) {
+
+    ESP_LOGE(
+        TAG,
+        "Valve position manager initialization failed: %s",
+        esp_err_to_name(err));
+
+    return err;
+}
+
+ESP_LOGI(
+    TAG,
+    "Valve position manager initialized");
+
 
     /* ---------------------------------------------------------------------- */
     /* Battery Manager                                                        */
