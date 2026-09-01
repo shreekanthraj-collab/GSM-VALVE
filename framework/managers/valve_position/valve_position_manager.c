@@ -17,6 +17,7 @@ static int64_t s_open_total_angle = 0;
 
 static valve_position_status_t s_status;
 
+
 /* -------------------------------------------------------------------------- */
 /* Internal helpers                                                           */
 /* -------------------------------------------------------------------------- */
@@ -38,7 +39,7 @@ esp_err_t valve_position_manager_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-   if (!encoder_position_is_initialized()) {
+    if (!encoder_position_is_initialized()) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -92,6 +93,7 @@ esp_err_t valve_position_manager_init(void)
     return ESP_OK;
 }
 
+
 /* -------------------------------------------------------------------------- */
 /* Position command                                                           */
 /* -------------------------------------------------------------------------- */
@@ -131,6 +133,33 @@ esp_err_t valve_position_set_target(
     if (err != ESP_OK) {
         return err;
     }
+
+    /*
+     * Calculate the absolute encoder target
+     * from the persisted CLOSED/OPEN calibration.
+     */
+    s_status.target_percent =
+        percent;
+
+    s_status.target_total_angle =
+        calculate_target_total_angle(
+            percent);
+
+    s_status.current_total_angle =
+        position.total_angle;
+
+    s_status.target_active =
+        true;
+
+    s_status.moving =
+        false;
+
+    s_status.valid =
+        true;
+
+    return ESP_OK;
+}
+
 
 /* -------------------------------------------------------------------------- */
 /* Runtime processing                                                         */
@@ -181,7 +210,7 @@ esp_err_t valve_position_manager_update(
         position.total_angle;
 
     /*
-     * Determine the required direction.
+     * Obtain actuator state.
      */
     actuator_manager_status_t actuator =
         {0};
@@ -219,6 +248,8 @@ esp_err_t valve_position_manager_update(
 
     /*
      * Target is above the current position.
+     *
+     * Move OPEN.
      */
     if (position.total_angle <
         s_status.target_total_angle) {
@@ -231,6 +262,7 @@ esp_err_t valve_position_manager_update(
                 ACTUATOR_DIRECTION_OPEN) {
 
             s_status.moving = true;
+
             return ESP_OK;
         }
 
@@ -249,6 +281,7 @@ esp_err_t valve_position_manager_update(
             }
 
             s_status.moving = false;
+
             return ESP_OK;
         }
 
@@ -267,12 +300,15 @@ esp_err_t valve_position_manager_update(
 
     /*
      * Target is below the current position.
+     *
+     * Move CLOSE.
      */
     if (actuator.motor_running &&
         actuator.direction ==
             ACTUATOR_DIRECTION_CLOSE) {
 
         s_status.moving = true;
+
         return ESP_OK;
     }
 
@@ -291,6 +327,7 @@ esp_err_t valve_position_manager_update(
         }
 
         s_status.moving = false;
+
         return ESP_OK;
     }
 
@@ -307,6 +344,7 @@ esp_err_t valve_position_manager_update(
     return ESP_OK;
 }
 
+
 /* -------------------------------------------------------------------------- */
 /* Status                                                                     */
 /* -------------------------------------------------------------------------- */
@@ -321,21 +359,6 @@ esp_err_t valve_position_manager_get_status(
     if (status == NULL) {
         return ESP_ERR_INVALID_ARG;
     }
-
-/* -------------------------------------------------------------------------- */
-/* State queries                                                              */
-/* -------------------------------------------------------------------------- */
-
-bool valve_position_manager_is_initialized(void)
-{
-    return s_initialized;
-}
-
-
-bool valve_position_manager_is_target_active(void)
-{
-    return s_status.target_active;
-}
 
     /*
      * Refresh the current encoder position when available.
@@ -363,31 +386,22 @@ bool valve_position_manager_is_target_active(void)
     return ESP_OK;
 }
 
-    /*
-     * Calculate the absolute encoder target
-     * from the persisted CLOSED/OPEN calibration.
-     */
-    s_status.target_percent =
-        percent;
 
-    s_status.target_total_angle =
-        calculate_target_total_angle(
-            percent);
+/* -------------------------------------------------------------------------- */
+/* State queries                                                              */
+/* -------------------------------------------------------------------------- */
 
-    s_status.current_total_angle =
-        position.total_angle;
-
-    s_status.target_active =
-        true;
-
-    s_status.moving =
-        false;
-
-    s_status.valid =
-        true;
-
-    return ESP_OK;
+bool valve_position_manager_is_initialized(void)
+{
+    return s_initialized;
 }
+
+
+bool valve_position_manager_is_target_active(void)
+{
+    return s_status.target_active;
+}
+
 
 /* -------------------------------------------------------------------------- */
 /* Cancellation                                                               */
@@ -425,6 +439,7 @@ esp_err_t valve_position_manager_cancel(
 
     return ESP_OK;
 }
+
 
 /* -------------------------------------------------------------------------- */
 /* Target calculation                                                         */
