@@ -17,6 +17,8 @@ extern "C" {
 typedef enum
 {
     SAFETY_STATE_NORMAL = 0,
+    
+    SAFETY_STATE_EMERGENCY_STOP,
 
     SAFETY_STATE_LOW_BATTERY,
 
@@ -179,7 +181,27 @@ esp_err_t safety_manager_evaluate(
  * fault condition has been resolved.
  */
 esp_err_t safety_manager_clear_fault(void);
+/*
+ * Latch an emergency stop.
+ *
+ * The actuator must remain stopped until
+ * the emergency stop is explicitly cleared.
+ */
+esp_err_t safety_manager_emergency_stop(void);
 
+
+/*
+ * Clear the emergency-stop latch.
+ *
+ * Clearing the latch does not start the motor.
+ */
+esp_err_t safety_manager_clear_emergency_stop(void);
+
+
+/*
+ * Check whether an emergency stop is active.
+ */
+bool safety_manager_is_emergency_stopped(void);
 
 /*
  * Reset per-motor-cycle timing state.

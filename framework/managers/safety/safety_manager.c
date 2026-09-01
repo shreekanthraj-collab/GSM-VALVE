@@ -7,6 +7,7 @@
 
 static bool s_initialized = false;
 static bool s_fault_latched = false;
+static bool s_emergency_stop_latched = false;
 
 static safety_manager_config_t s_config = {0};
 
@@ -90,6 +91,7 @@ esp_err_t safety_manager_init(
     s_config = *config;
 
     s_fault_latched = false;
+    s_emergency_stop_latched = false;
 
     s_state =
         SAFETY_STATE_NORMAL;
@@ -126,6 +128,32 @@ esp_err_t safety_manager_evaluate(
 
     output->valid = true;
 
+/* ---------------------------------------------------------------------- */
+/* Emergency stop                                                         */
+/* ---------------------------------------------------------------------- */
+
+if (s_emergency_stop_latched) {
+
+    s_state =
+        SAFETY_STATE_EMERGENCY_STOP;
+
+    output->state =
+        s_state;
+
+    output->allow_motor_start = false;
+    output->allow_motor_run = false;
+
+    output->request_motor_stop =
+        inputs->motor_running;
+
+    output->request_motor_close = false;
+
+    output->bypass_required = false;
+
+    output->fault = true;
+
+    return ESP_OK;
+}
 
     /* ---------------------------------------------------------------------- */
     /* Latched fault                                                           */
@@ -386,6 +414,22 @@ esp_err_t safety_manager_evaluate(
 /* Fault control                                                              */
 /* -------------------------------------------------------------------------- */
 
+esp_err_t safety_manager_emergency_stop(void)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_emergency_stop_latched = true;
+
+    s_state =
+        SAFETY_STATE_EMERGENCY_STOP;
+
+    clear_motor_timing();
+
+    return ESP_OK;
+}
+
 esp_err_t safety_manager_clear_fault(void)
 {
     if (!s_initialized) {
@@ -396,6 +440,24 @@ esp_err_t safety_manager_clear_fault(void)
 
     s_state =
         SAFETY_STATE_NORMAL;
+
+    clear_motor_timing();
+
+    return ESP_OK;
+}
+
+esp_err_t safety_manager_clear_emergency_stop(void)
+{
+    if (!s_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    s_emergency_stop_latched = false;
+
+    if (!s_fault_latched) {
+        s_state =
+            SAFETY_STATE_NORMAL;
+    }
 
     clear_motor_timing();
 
@@ -415,7 +477,8 @@ esp_err_t safety_manager_reset_cycle(void)
 
     clear_motor_timing();
 
-    if (!s_fault_latched) {
+    if (!s_fault_latched &&
+        !s_emergency_stop_latched) {
 
         s_state =
             SAFETY_STATE_NORMAL;
@@ -423,7 +486,6 @@ esp_err_t safety_manager_reset_cycle(void)
 
     return ESP_OK;
 }
-
 
 /* -------------------------------------------------------------------------- */
 /* Status                                                                     */
@@ -438,6 +500,11 @@ bool safety_manager_is_initialized(void)
 bool safety_manager_is_fault_latched(void)
 {
     return s_fault_latched;
+}
+
+bool safety_manager_is_emergency_stopped(void)
+{
+    return s_emergency_stop_latched;
 }
 
 
