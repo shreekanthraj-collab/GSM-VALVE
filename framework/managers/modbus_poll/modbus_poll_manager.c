@@ -13,7 +13,6 @@
 
 #define MODBUS_POLL_TASK_STACK_SIZE    4096U
 #define MODBUS_POLL_TASK_PRIORITY      5U
-#define MODBUS_POLL_SLOT_COUNT         8U
 
 
 /* -------------------------------------------------------------------------- */
@@ -71,8 +70,8 @@ static void modbus_poll_task(
     while (true) {
 
         for (uint8_t slot = 0U;
-             slot < MODBUS_POLL_SLOT_COUNT;
-             ++slot) {
+     slot < MODBUS_DEVICE_MAX_SLOTS;
+     ++slot) {
 
             s_status.current_slot = slot;
 

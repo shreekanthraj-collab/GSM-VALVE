@@ -2,6 +2,9 @@
 
 #include <string.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
 #include "modbus_master.h"
 
 
@@ -24,6 +27,7 @@ typedef struct
 } modbus_device_slot_t;
 
 static bool s_initialized = false;
+static SemaphoreHandle_t s_mutex = NULL;
 
 static modbus_device_slot_t s_slots[
     MODBUS_DEVICE_MAX_SLOTS
@@ -102,8 +106,15 @@ esp_err_t modbus_device_manager_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+
     if (!modbus_master_is_initialized()) {
         return ESP_ERR_INVALID_STATE;
+    }
+
+    s_mutex = xSemaphoreCreateMutex();
+
+    if (s_mutex == NULL) {
+        return ESP_ERR_NO_MEM;
     }
 
     memset(
@@ -133,7 +144,9 @@ esp_err_t modbus_device_manager_init(void)
 
     s_initialized = true;
 
+
     return ESP_OK;
+
 }
 
 
@@ -151,6 +164,11 @@ esp_err_t modbus_device_manager_deinit(void)
         s_slots,
         0,
         sizeof(s_slots));
+
+    if (s_mutex != NULL) {
+        vSemaphoreDelete(s_mutex);
+        s_mutex = NULL;
+    }
 
     s_initialized = false;
 
@@ -182,6 +200,13 @@ esp_err_t modbus_device_configure(
         return ESP_ERR_INVALID_ARG;
     }
 
+       if (xSemaphoreTake(
+            s_mutex,
+            pdMS_TO_TICKS(1000)) != pdTRUE) {
+
+        return ESP_ERR_TIMEOUT;
+    }
+
     s_slots[slot].config = *config;
 
     /*
@@ -196,6 +221,8 @@ esp_err_t modbus_device_configure(
         s_slots[slot].state.registers,
         0,
         sizeof(s_slots[slot].state.registers));
+
+    xSemaphoreGive(s_mutex);
 
     return ESP_OK;
 }
@@ -212,7 +239,16 @@ esp_err_t modbus_device_disable(
         return ESP_ERR_INVALID_STATE;
     }
 
+        if (xSemaphoreTake(
+            s_mutex,
+            pdMS_TO_TICKS(1000)) != pdTRUE) {
+
+        return ESP_ERR_TIMEOUT;
+    }
+
     s_slots[slot].config.enabled = false;
+
+    xSemaphoreGive(s_mutex);
 
     return ESP_OK;
 }
@@ -231,11 +267,19 @@ esp_err_t modbus_device_get_config(
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (xSemaphoreTake(
+            s_mutex,
+            pdMS_TO_TICKS(1000)) != pdTRUE) {
+
+        return ESP_ERR_TIMEOUT;
+    }
+
     *config = s_slots[slot].config;
+
+    xSemaphoreGive(s_mutex);
 
     return ESP_OK;
 }
-
 
 /* -------------------------------------------------------------------------- */
 /* Polling                                                                    */
@@ -287,6 +331,7 @@ esp_err_t modbus_device_poll(
         device->state.last_error = err;
         device->state.failed_polls++;
 
+
         return err;
     }
 
@@ -299,9 +344,10 @@ esp_err_t modbus_device_poll(
     device->state.register_count =
         device->config.register_count;
 
-    device->state.last_error = ESP_OK;
+      device->state.last_error = ESP_OK;
     device->state.successful_polls++;
     device->state.valid = true;
+
 
     return ESP_OK;
 }

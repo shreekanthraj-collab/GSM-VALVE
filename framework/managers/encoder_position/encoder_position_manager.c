@@ -41,12 +41,7 @@ esp_err_t encoder_position_init(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    esp_err_t err =
-        encoder_manager_init();
 
-    if (err != ESP_OK) {
-        return err;
-    }
 
     s_initialized = true;
     s_valid = false;

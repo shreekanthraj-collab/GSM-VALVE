@@ -1,4 +1,4 @@
-﻿#include "hal_actuator.h"
+#include "hal_actuator.h"
 #include "actuator_manager.h"
 
 #include "freertos/FreeRTOS.h"
@@ -782,6 +782,7 @@ static esp_err_t app_init_network_stack(void)
 /* Application initialization                                                 */
 /* -------------------------------------------------------------------------- */
 
+
 static esp_err_t app_init(void)
 {
     esp_err_t err;
@@ -1081,14 +1082,7 @@ static esp_err_t app_init(void)
                  esp_err_to_name(err));
         return err;
     }
-/*
-err = modbus_poll_manager_start();
-if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Modbus poll start failed: %s",
-             esp_err_to_name(err));
-    return err;
-}
-*/
+
     err = modbus_poll_manager_start();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Modbus poll start failed: %s",
@@ -1690,15 +1684,7 @@ ESP_LOGI(
     ESP_LOGI(
         TAG,
         "==================================================");
-    err = modbus_poll_manager_start();
 
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Modbus poll start failed: %s",
-                 esp_err_to_name(err));
-        return err;
-    }
-
-    ESP_LOGI(TAG, "Modbus polling started");
     return ESP_OK;
 }
 
@@ -1988,7 +1974,7 @@ void app_main(void)
             continue;
         }
 
-        
+
 
         /* -------------------------------------------------------------- */
         /* Monitoring log                                                 */

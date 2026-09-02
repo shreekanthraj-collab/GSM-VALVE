@@ -196,13 +196,13 @@ static esp_err_t start_operation(
  */
 static esp_err_t stop_operation(void)
 {
+    s_status.state =
+        ACTUATOR_STATE_STOPPING;
+
     esp_err_t err =
         hal_actuator_stop();
 
     if (err != ESP_OK) {
-        s_status.state =
-            ACTUATOR_STATE_STOPPING;
-
         return err;
     }
 
@@ -213,7 +213,6 @@ static esp_err_t stop_operation(void)
 
     return ESP_OK;
 }
-
 
 /*
  * Force the physical actuator into the hardware-safe state.
